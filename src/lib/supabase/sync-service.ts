@@ -9,6 +9,23 @@ export interface SyncStatus {
   tables?: { [table: string]: number };
 }
 
+/**
+ * Ensures an ID matches standard PostgreSQL UUID syntax deterministically.
+ */
+function ensureUuid(id?: string): string {
+  if (!id) return "00000000-0000-0000-0000-000000000000";
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    return id.toLowerCase();
+  }
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = (hash << 5) - hash + id.charCodeAt(i);
+    hash |= 0;
+  }
+  const hex = Math.abs(hash).toString(16).padStart(12, "0");
+  return `00000000-0000-4000-8000-${hex.slice(0, 12)}`;
+}
+
 export const supabaseSyncService = {
   /**
    * Ping Supabase to test connectivity and latency
@@ -107,114 +124,209 @@ export const supabaseSyncService = {
 
       // 1. Profiles
       if (allProfiles.length > 0) {
-        const { error: profErr } = await supabase.from("profiles").upsert(
-          allProfiles.map((p) => ({
-            id: p.id,
-            email: p.email,
-            full_name: p.full_name,
-            role: p.role,
-            phone: p.phone || null,
-          })),
-          { onConflict: "id" }
-        );
-        if (!profErr) totalSynced += allProfiles.length;
+        const payload = allProfiles.map((p) => ({
+          id: ensureUuid(p.id),
+          email: p.email,
+          full_name: p.full_name,
+          role: p.role,
+          phone: p.phone || null,
+        }));
+        const { error } = await supabase.from("profiles").upsert(payload, { onConflict: "id" });
+        if (error) console.warn("Sync profiles error:", error.message);
+        else totalSynced += payload.length;
       }
 
       // 2. Projects
       if (allProjects.length > 0) {
-        const { error: prjErr } = await supabase.from("projects").upsert(
-          allProjects.map((p) => ({
-            id: p.id,
-            name: p.name,
-            code: p.code,
-            project_type: p.project_type,
-            description: p.description,
-            location: p.location,
-            client: p.client,
-            project_manager_id: p.project_manager_id || null,
-            start_date: p.start_date,
-            planned_completion_date: p.planned_completion_date,
-            actual_completion_date: p.actual_completion_date || null,
-            approved_budget: p.approved_budget,
-            currency: p.currency,
-            status: p.status,
-          })),
-          { onConflict: "id" }
-        );
-        if (!prjErr) totalSynced += allProjects.length;
+        const payload = allProjects.map((p) => ({
+          id: ensureUuid(p.id),
+          name: p.name,
+          code: p.code,
+          project_type: p.project_type,
+          description: p.description,
+          location: p.location,
+          client: p.client,
+          project_manager_id: p.project_manager_id ? ensureUuid(p.project_manager_id) : null,
+          start_date: p.start_date,
+          planned_completion_date: p.planned_completion_date,
+          actual_completion_date: p.actual_completion_date || null,
+          approved_budget: p.approved_budget,
+          currency: p.currency || "INR",
+          status: p.status,
+        }));
+        const { error } = await supabase.from("projects").upsert(payload, { onConflict: "id" });
+        if (error) console.warn("Sync projects error:", error.message);
+        else totalSynced += payload.length;
       }
 
       // 3. For each project: Hierarchy, Activities, Materials, Daily Logs, Attendance, Expenses, Evidence
       for (const prj of allProjects) {
         const pId = prj.id;
+        const validProjectId = ensureUuid(pId);
 
         // Hierarchy
         const nodes = repository.getHierarchy(pId);
         if (nodes.length > 0) {
-          await supabase.from("hierarchy_nodes").upsert(nodes, { onConflict: "id" });
-          totalSynced += nodes.length;
+          const payload = nodes.map((n) => ({
+            id: ensureUuid(n.id),
+            project_id: validProjectId,
+            parent_id: n.parent_id ? ensureUuid(n.parent_id) : null,
+            node_type: n.node_type,
+            name: n.name,
+            code: n.code,
+            order_index: n.order_index || 0,
+          }));
+          const { error } = await supabase.from("hierarchy_nodes").upsert(payload, { onConflict: "id" });
+          if (!error) totalSynced += payload.length;
         }
 
         // Activities
         const acts = repository.getActivities(pId);
         if (acts.length > 0) {
-          await supabase.from("activities").upsert(acts, { onConflict: "id" });
-          totalSynced += acts.length;
+          const payload = acts.map((a) => ({
+            id: ensureUuid(a.id),
+            project_id: validProjectId,
+            hierarchy_node_id: a.hierarchy_node_id ? ensureUuid(a.hierarchy_node_id) : null,
+            code: a.code,
+            name: a.name,
+            description: a.description,
+            responsible_id: a.responsible_id ? ensureUuid(a.responsible_id) : null,
+            start_date: a.start_date,
+            planned_finish_date: a.planned_finish_date,
+            actual_start_date: a.actual_start_date || null,
+            actual_finish_date: a.actual_finish_date || null,
+            planned_quantity: a.planned_quantity || 0,
+            verified_quantity: a.verified_quantity || 0,
+            unit: a.unit,
+            priority: a.priority,
+            status: a.status,
+            weight_percent: a.weight_percent || 1,
+          }));
+          const { error } = await supabase.from("activities").upsert(payload, { onConflict: "id" });
+          if (!error) totalSynced += payload.length;
         }
 
         // Materials
         const mats = repository.getMaterials(pId);
         if (mats.length > 0) {
-          await supabase.from("materials").upsert(mats, { onConflict: "id" });
-          totalSynced += mats.length;
+          const payload = mats.map((m) => ({
+            id: ensureUuid(m.id),
+            project_id: validProjectId,
+            code: m.code,
+            name: m.name,
+            category: m.category,
+            unit: m.unit,
+            unit_cost: m.unit_cost || 0,
+            minimum_stock_level: m.minimum_stock_level || 0,
+            current_stock: m.current_stock || 0,
+            supplier_name: m.supplier_name || null,
+            status: m.status,
+          }));
+          const { error } = await supabase.from("materials").upsert(payload, { onConflict: "id" });
+          if (!error) totalSynced += payload.length;
         }
 
         // Stock Movements
         const movements = repository.getStockMovements(pId);
         if (movements.length > 0) {
-          await supabase.from("stock_movements").upsert(movements, { onConflict: "id" });
-          totalSynced += movements.length;
+          const payload = movements.map((m) => ({
+            id: ensureUuid(m.id),
+            project_id: validProjectId,
+            material_id: ensureUuid(m.material_id),
+            activity_id: m.activity_id ? ensureUuid(m.activity_id) : null,
+            movement_type: m.movement_type,
+            quantity: m.quantity,
+            unit_cost: m.unit_cost || 0,
+            total_cost: m.total_cost || 0,
+            reference_no: m.reference_no,
+            notes: m.notes || null,
+            performed_by: ensureUuid(m.performed_by),
+          }));
+          const { error } = await supabase.from("stock_movements").upsert(payload, { onConflict: "id" });
+          if (!error) totalSynced += payload.length;
         }
 
         // Daily Logs
         const logs = repository.getDailyLogs(pId);
         if (logs.length > 0) {
-          await supabase.from("daily_logs").upsert(logs, { onConflict: "id" });
-          totalSynced += logs.length;
+          const payload = logs.map((l) => ({
+            id: ensureUuid(l.id),
+            project_id: validProjectId,
+            hierarchy_node_id: l.hierarchy_node_id ? ensureUuid(l.hierarchy_node_id) : null,
+            log_date: l.log_date,
+            author_id: ensureUuid(l.author_id),
+            weather_condition: l.weather_condition || "sunny",
+            temperature: l.temperature || null,
+            workforce_count: l.workforce_count || 0,
+            equipment_used: l.equipment_used || null,
+            delays_summary: l.delays_summary || null,
+            general_notes: l.general_notes || null,
+            status: l.status,
+            reviewed_by: l.reviewed_by ? ensureUuid(l.reviewed_by) : null,
+            review_notes: l.review_notes || null,
+          }));
+          const { error } = await supabase.from("daily_logs").upsert(payload, { onConflict: "id" });
+          if (!error) totalSynced += payload.length;
         }
 
         // Daily Attendance
         const attendance = repository.getAttendance(pId);
         if (attendance.length > 0) {
-          await supabase.from("daily_attendance").upsert(attendance, { onConflict: "id" });
-          totalSynced += attendance.length;
+          const payload = attendance.map((a) => ({
+            id: ensureUuid(a.id),
+            project_id: validProjectId,
+            date: a.date,
+            supervisor_id: a.supervisor_id ? ensureUuid(a.supervisor_id) : null,
+            labor_category: a.labor_category,
+            headcount: a.headcount,
+            shift: a.shift === "day" ? "morning" : a.shift,
+            contractor_name: a.contractor_name || null,
+            notes: a.notes || null,
+          }));
+          const { error } = await supabase.from("daily_attendance").upsert(payload, { onConflict: "id" });
+          if (!error) totalSynced += payload.length;
         }
 
         // Expenses
         const expenses = repository.getExpenses(pId);
         if (expenses.length > 0) {
-          await supabase.from("expenses").upsert(expenses, { onConflict: "id" });
-          totalSynced += expenses.length;
+          const payload = expenses.map((e) => ({
+            id: ensureUuid(e.id),
+            project_id: validProjectId,
+            activity_id: e.activity_id ? ensureUuid(e.activity_id) : null,
+            category: e.category,
+            description: e.description,
+            amount: e.amount,
+            currency: e.currency || "INR",
+            payee: e.payee,
+            expense_date: e.expense_date,
+            status: e.status || "approved",
+            approved_by: e.approved_by ? ensureUuid(e.approved_by) : null,
+          }));
+          const { error } = await supabase.from("expenses").upsert(payload, { onConflict: "id" });
+          if (!error) totalSynced += payload.length;
         }
 
         // Evidence Files
         const evidence = repository.getEvidence(pId);
         if (evidence.length > 0) {
-          await supabase.from("evidence_files").upsert(evidence, { onConflict: "id" });
-          totalSynced += evidence.length;
-        }
-
-        // Quality Issues & Safety
-        const quality = repository.getQualityIssues(pId);
-        if (quality.length > 0) {
-          await supabase.from("quality_issues").upsert(quality, { onConflict: "id" });
-          totalSynced += quality.length;
-        }
-
-        const safety = repository.getSafetyObservations(pId);
-        if (safety.length > 0) {
-          await supabase.from("safety_observations").upsert(safety, { onConflict: "id" });
-          totalSynced += safety.length;
+          const payload = evidence.map((ev) => ({
+            id: ensureUuid(ev.id),
+            project_id: validProjectId,
+            activity_id: ev.activity_id ? ensureUuid(ev.activity_id) : null,
+            hierarchy_node_id: ev.hierarchy_node_id ? ensureUuid(ev.hierarchy_node_id) : null,
+            daily_log_id: ev.daily_log_id ? ensureUuid(ev.daily_log_id) : null,
+            evidence_type: ev.evidence_type,
+            title: ev.title,
+            description: ev.description || null,
+            uploader_id: ensureUuid(ev.uploader_id),
+            file_path: ev.file_path,
+            file_type: ev.file_type || "image/jpeg",
+            file_size_bytes: ev.file_size_bytes || 0,
+            review_status: ev.review_status || "verified",
+          }));
+          const { error } = await supabase.from("evidence_files").upsert(payload, { onConflict: "id" });
+          if (!error) totalSynced += payload.length;
         }
       }
 
