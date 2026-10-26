@@ -278,7 +278,12 @@ export const supabaseSyncService = {
             date: a.date,
             supervisor_id: a.supervisor_id ? ensureUuid(a.supervisor_id) : null,
             labor_category: a.labor_category,
+            skill_level: a.skill_level || "skilled",
+            full_day_count: a.full_day_count || 0,
+            half_day_count: a.half_day_count || 0,
             headcount: a.headcount,
+            daily_wage_rate: a.daily_wage_rate || 0,
+            total_payout: a.total_payout || 0,
             shift: a.shift === "day" ? "morning" : a.shift,
             contractor_name: a.contractor_name || null,
             notes: a.notes || null,
@@ -431,6 +436,31 @@ export const supabaseSyncService = {
       if (record.daily_log_id) record.daily_log_id = ensureUuid(record.daily_log_id);
       if (record.parent_id) record.parent_id = ensureUuid(record.parent_id);
       if (record.shift === "day") record.shift = "morning";
+
+      // Daily attendance specific payload mapping
+      if (table === "daily_attendance") {
+        const attPayload = {
+          id: record.id,
+          project_id: record.project_id,
+          date: record.date,
+          supervisor_id: record.supervisor_id ? ensureUuid(record.supervisor_id) : null,
+          labor_category: record.labor_category,
+          skill_level: record.skill_level || "skilled",
+          full_day_count: Number(record.full_day_count) || 0,
+          half_day_count: Number(record.half_day_count) || 0,
+          headcount: Number(record.headcount) || 0,
+          daily_wage_rate: Number(record.daily_wage_rate) || 0,
+          total_payout: Number(record.total_payout) || 0,
+          shift: record.shift === "day" ? "morning" : record.shift,
+          contractor_name: record.contractor_name || null,
+          notes: record.notes || null,
+        };
+        const { error } = await supabase.from("daily_attendance").upsert(attPayload, { onConflict: "id" });
+        if (error) {
+          console.warn("[Supabase AutoSave] Write to daily_attendance failed:", error.message);
+        }
+        return;
+      }
 
       // Expenses specific payload mapping (matching PostgreSQL table schema)
       if (table === "expenses") {

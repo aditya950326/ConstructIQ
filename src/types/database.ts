@@ -1,13 +1,20 @@
 export type UserRole = "super_admin" | "project_manager" | "site_engineer" | "site_supervisor";
 
+export type LaborSkillLevel = "skilled" | "semi_skilled" | "helper" | "operator";
+
 export interface DailyAttendance {
   id: string;
   project_id: string;
   date: string;
   supervisor_id: string;
-  labor_category: string; // "Masons", "Carpenters", "Bar Benders", "Helpers", "Welder", "Electrician"
-  headcount: number;
-  shift: "day" | "night";
+  labor_category: string; // e.g., "Masons", "Carpenters", "Bar Benders", "Helpers", "Welder", "Electrician"
+  skill_level?: LaborSkillLevel; // "skilled" | "semi_skilled" | "helper" | "operator"
+  full_day_count?: number; // Count of full day workers (1.0 shift)
+  half_day_count?: number; // Count of half day workers (0.5 shift)
+  headcount: number; // Total workers headcount = full_day_count + half_day_count
+  daily_wage_rate?: number; // Daily wage rate in INR (₹)
+  total_payout?: number; // Total daily pay = (full_day * rate) + (half_day * rate * 0.5)
+  shift: "day" | "night" | "overtime";
   contractor_name?: string;
   notes?: string;
   created_at: string;

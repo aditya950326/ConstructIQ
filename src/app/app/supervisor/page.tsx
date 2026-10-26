@@ -6,7 +6,7 @@ import { AppShell } from "@/components/layout/AppShell";
 import { repository } from "@/lib/data/repository";
 import { mediaStorage } from "@/lib/storage/media-storage";
 import { ResolvedMedia } from "@/components/media/ResolvedMedia";
-import { DailyAttendance, EvidenceFile, Expense, Activity, HierarchyNode } from "@/types/database";
+import { DailyAttendance, EvidenceFile, Expense, Activity, HierarchyNode, LaborSkillLevel } from "@/types/database";
 import {
   Users,
   Camera,
@@ -31,6 +31,11 @@ import {
   AlertTriangle,
   BarChart3,
   TrendingUp,
+  Download,
+  Filter,
+  IndianRupee,
+  Search,
+  ShieldCheck,
 } from "lucide-react";
 import {
   LaborHeadcountChart,
@@ -64,10 +69,30 @@ function SupervisorPortalContent() {
   // Form State: Work 1 - Attendance
   const [attDate, setAttDate] = useState("2026-10-23");
   const [laborCategory, setLaborCategory] = useState("Carpenters (Shuttering)");
-  const [headcount, setHeadcount] = useState(12);
+  const [skillLevel, setSkillLevel] = useState<LaborSkillLevel>("skilled");
+  const [fullDayCount, setFullDayCount] = useState<number>(8);
+  const [halfDayCount, setHalfDayCount] = useState<number>(0);
+  const [dailyWageRate, setDailyWageRate] = useState<number>(900);
   const [shift, setShift] = useState<any>("day");
   const [contractorName, setContractorName] = useState("Omkar Formwork Contractors");
   const [attNotes, setAttNotes] = useState("Columns C1-C8 shuttering gang");
+
+  // Attendance Table Filters
+  const [filterDate, setFilterDate] = useState<string>("all");
+  const [filterSkill, setFilterSkill] = useState<string>("all");
+  const [filterSearch, setFilterSearch] = useState<string>("");
+
+  const defaultWageBySkill: Record<LaborSkillLevel, number> = {
+    skilled: 900,
+    semi_skilled: 750,
+    helper: 550,
+    operator: 1200,
+  };
+
+  const handleSkillLevelChange = (lvl: LaborSkillLevel) => {
+    setSkillLevel(lvl);
+    setDailyWageRate(defaultWageBySkill[lvl]);
+  };
 
   // Form State: Work 2 - Photos & Videos
   const [photoTitle, setPhotoTitle] = useState("");
@@ -158,13 +183,28 @@ function SupervisorPortalContent() {
   const handleSaveAttendance = (e: React.FormEvent) => {
     e.preventDefault();
     const user = repository.getCurrentUser();
+    const fDays = Number(fullDayCount) || 0;
+    const hDays = Number(halfDayCount) || 0;
+    const totalWorkers = fDays + hDays;
+    if (totalWorkers <= 0) {
+      alert("Please specify at least 1 full-day or half-day worker.");
+      return;
+    }
+
+    const wageRate = Number(dailyWageRate) || 0;
+    const calculatedPay = Math.round((fDays * wageRate) + (hDays * wageRate * 0.5));
 
     repository.recordAttendance({
       project_id: projectId,
       date: attDate,
       supervisor_id: user.id,
       labor_category: laborCategory,
-      headcount: Number(headcount),
+      skill_level: skillLevel,
+      full_day_count: fDays,
+      half_day_count: hDays,
+      headcount: totalWorkers,
+      daily_wage_rate: wageRate,
+      total_payout: calculatedPay,
       shift,
       contractor_name: contractorName,
       notes: attNotes,
@@ -172,6 +212,55 @@ function SupervisorPortalContent() {
 
     loadData();
     setIsAttendanceModalOpen(false);
+  };
+
+  const handleDeleteAttendance = (id: string, category: string) => {
+    if (window.confirm(`Are you sure you want to remove the attendance log for "${category}"?`)) {
+      repository.deleteAttendance(id);
+      loadData();
+    }
+  };
+
+  const handleExportAttendanceCSV = () => {
+    const headers = [
+      "Date",
+      "Shift",
+      "Trade Category",
+      "Skill Level",
+      "Full Day (1.0)",
+      "Half Day (0.5)",
+      "Total Headcount",
+      "Daily Wage Rate (INR)",
+      "Total Daily Pay (INR)",
+      "Contractor / Gang",
+      "Site Notes",
+    ];
+    const rows = filteredAttendance.map((a) => [
+      a.date,
+      a.shift,
+      `"${(a.labor_category || "").replace(/"/g, '""')}"`,
+      a.skill_level || "skilled",
+      a.full_day_count !== undefined ? a.full_day_count : a.headcount,
+      a.half_day_count || 0,
+      a.headcount,
+      a.daily_wage_rate || 0,
+      a.total_payout || 0,
+      `"${(a.contractor_name || "").replace(/"/g, '""')}"`,
+      `"${(a.notes || "").replace(/"/g, '""')}"`,
+    ]);
+    const csvContent =
+      "data:text/csv;charset=utf-8," +
+      [headers.join(","), ...rows.map((e) => e.join(","))].join("\n");
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute(
+      "download",
+      `Labor_Muster_Wage_Sheet_${projectId}_${new Date().toISOString().slice(0, 10)}.csv`
+    );
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   // File change handler for Media
@@ -348,6 +437,57 @@ function SupervisorPortalContent() {
     );
   }
 
+  // Filtered Attendance for Table & Calculations
+  const filteredAttendance = attendanceList.filter((att) => {
+    if (filterDate !== "all" && att.date !== filterDate) return false;
+    if (filterSkill !== "all" && (att.skill_level || "skilled") !== filterSkill) return false;
+    if (filterSearch.trim()) {
+      const q = filterSearch.toLowerCase().trim();
+      const matchCat = (att.labor_category || "").toLowerCase().includes(q);
+      const matchContractor = (att.contractor_name || "").toLowerCase().includes(q);
+      const matchNotes = (att.notes || "").toLowerCase().includes(q);
+      if (!matchCat && !matchContractor && !matchNotes) return false;
+    }
+    return true;
+  });
+
+  const allAvailableDates = Array.from(new Set(attendanceList.map((a) => a.date))).sort().reverse();
+
+  // Summary Metrics for the Filtered Attendance
+  const totalHeadcountFiltered = filteredAttendance.reduce(
+    (sum, a) => sum + (a.headcount || ((a.full_day_count || 0) + (a.half_day_count || 0))),
+    0
+  );
+  const totalFullDaysFiltered = filteredAttendance.reduce(
+    (sum, a) => sum + (a.full_day_count !== undefined ? a.full_day_count : a.headcount),
+    0
+  );
+  const totalHalfDaysFiltered = filteredAttendance.reduce((sum, a) => sum + (a.half_day_count || 0), 0);
+
+  const totalSkilledFiltered = filteredAttendance
+    .filter((a) => (a.skill_level || "skilled") === "skilled")
+    .reduce((sum, a) => sum + (a.headcount || 0), 0);
+
+  const totalSemiSkilledFiltered = filteredAttendance
+    .filter((a) => a.skill_level === "semi_skilled")
+    .reduce((sum, a) => sum + (a.headcount || 0), 0);
+
+  const totalHelpersFiltered = filteredAttendance
+    .filter((a) => a.skill_level === "helper")
+    .reduce((sum, a) => sum + (a.headcount || 0), 0);
+
+  const totalOperatorsFiltered = filteredAttendance
+    .filter((a) => a.skill_level === "operator")
+    .reduce((sum, a) => sum + (a.headcount || 0), 0);
+
+  const totalWagesPayableFiltered = filteredAttendance.reduce((sum, a) => {
+    if (a.total_payout !== undefined && a.total_payout !== null) return sum + a.total_payout;
+    const fDays = a.full_day_count !== undefined ? a.full_day_count : a.headcount;
+    const hDays = a.half_day_count || 0;
+    const rate = a.daily_wage_rate || 750;
+    return sum + (fDays * rate) + (hDays * rate * 0.5);
+  }, 0);
+
   const totalWorkersToday = attendanceList
     .filter((a) => a.date === "2026-10-23")
     .reduce((sum, a) => sum + a.headcount, 0);
@@ -451,9 +591,359 @@ function SupervisorPortalContent() {
         </button>
       </div>
 
-      {/* TAB 1: EMPLOYEE DAILY ATTENDANCE */}
+      {/* TAB 1: EMPLOYEE DAILY ATTENDANCE & WAGE SHEET */}
       {activeTab === "attendance" && (
-        <div className="space-y-4 mt-6">
+        <div className="space-y-5 mt-6">
+          {/* Multi-Role Visibility & Verification Banner */}
+          <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 text-white rounded-xl p-4 shadow-subtle flex flex-col md:flex-row md:items-center justify-between gap-3 border border-blue-700/40">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-lg bg-blue-500/20 text-blue-200 border border-blue-400/30 shrink-0">
+                <ShieldCheck className="w-5 h-5 text-blue-300" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h4 className="font-heading font-extrabold text-sm text-white">
+                    Labor Muster Roll & Daily Wage Disbursement Sheet
+                  </h4>
+                  <span className="text-[10px] font-mono font-bold uppercase bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded border border-emerald-400/30">
+                    Active Ledger
+                  </span>
+                </div>
+                <p className="text-xs text-blue-100/80 mt-0.5">
+                  Recorded directly by Site Supervisor. Fully visible and verified across <strong className="text-white">Admin</strong>, <strong className="text-white">Project Manager</strong>, and <strong className="text-white">Site Engineer</strong> dashboards.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 self-start md:self-auto shrink-0 bg-white/10 px-3 py-1.5 rounded-lg border border-white/10 text-xs">
+              <span className="text-blue-200 text-[11px]">Audit Role:</span>
+              <span className="font-bold text-white uppercase tracking-wider text-[11px] font-mono">
+                {currentRole?.replace("_", " ") || "supervisor"}
+              </span>
+            </div>
+          </div>
+
+          {/* Key Attendance & Wage Metrics */}
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <div className="p-3.5 bg-construct-surface border border-construct-border rounded-xl shadow-xs">
+              <span className="text-[11px] font-mono uppercase text-construct-secondary block">Total Workforce</span>
+              <div className="flex items-baseline gap-1 mt-1">
+                <span className="text-2xl font-black font-mono text-construct-text">{totalHeadcountFiltered}</span>
+                <span className="text-[10px] text-construct-secondary">workers</span>
+              </div>
+              <span className="text-[10px] text-construct-secondary font-mono mt-0.5 block">
+                {totalFullDaysFiltered} Full • {totalHalfDaysFiltered} Half shifts
+              </span>
+            </div>
+
+            <div className="p-3.5 bg-construct-surface border border-construct-border rounded-xl shadow-xs">
+              <span className="text-[11px] font-mono uppercase text-indigo-700 block">Skilled Craftsmen</span>
+              <div className="flex items-baseline gap-1 mt-1">
+                <span className="text-2xl font-black font-mono text-indigo-600">{totalSkilledFiltered}</span>
+                <span className="text-[10px] text-indigo-500 font-semibold">mistris</span>
+              </div>
+              <span className="text-[10px] text-construct-secondary font-mono mt-0.5 block">
+                Masons, Bar benders, Carpenters
+              </span>
+            </div>
+
+            <div className="p-3.5 bg-construct-surface border border-construct-border rounded-xl shadow-xs">
+              <span className="text-[11px] font-mono uppercase text-teal-700 block">Helpers & Unskilled</span>
+              <div className="flex items-baseline gap-1 mt-1">
+                <span className="text-2xl font-black font-mono text-teal-600">{totalHelpersFiltered}</span>
+                <span className="text-[10px] text-teal-500 font-semibold">helpers</span>
+              </div>
+              <span className="text-[10px] text-construct-secondary font-mono mt-0.5 block">
+                Site beldars & mazdoors
+              </span>
+            </div>
+
+            <div className="p-3.5 bg-construct-surface border border-construct-border rounded-xl shadow-xs">
+              <span className="text-[11px] font-mono uppercase text-amber-700 block">Semi-Skilled / Oper.</span>
+              <div className="flex items-baseline gap-1 mt-1">
+                <span className="text-2xl font-black font-mono text-amber-600">{totalSemiSkilledFiltered + totalOperatorsFiltered}</span>
+                <span className="text-[10px] text-amber-500 font-semibold">crew</span>
+              </div>
+              <span className="text-[10px] text-construct-secondary font-mono mt-0.5 block">
+                {totalSemiSkilledFiltered} semi + {totalOperatorsFiltered} operators
+              </span>
+            </div>
+
+            <div className="p-3.5 bg-emerald-50/80 border border-emerald-300 rounded-xl shadow-xs col-span-2 md:col-span-1">
+              <span className="text-[11px] font-mono uppercase text-emerald-800 font-bold flex items-center gap-1">
+                <IndianRupee className="w-3.5 h-3.5" />
+                <span>Total Daily Pay</span>
+              </span>
+              <div className="flex items-baseline gap-0.5 mt-1">
+                <span className="text-xl font-black font-mono text-emerald-700">
+                  ₹{totalWagesPayableFiltered.toLocaleString("en-IN")}
+                </span>
+              </div>
+              <span className="text-[10px] text-emerald-700/80 font-mono mt-0.5 block">
+                Daily labor liability
+              </span>
+            </div>
+          </div>
+
+          {/* Muster Roll & Wage Sheet Table Card */}
+          <div className="bg-construct-surface border border-construct-border rounded-xl shadow-subtle overflow-hidden">
+            {/* Table Header & Controls */}
+            <div className="p-4 border-b border-construct-border flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div>
+                <h3 className="font-heading font-bold text-sm text-construct-text flex items-center gap-2">
+                  <Users className="w-4 h-4 text-construct-orange" />
+                  <span>On-Site Labor Muster Roll & Daily Wage Sheet</span>
+                </h3>
+                <p className="text-xs text-construct-secondary">
+                  Detailed muster entries categorized by skill tier, full/half shift duration, and daily wage disbursements.
+                </p>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={handleExportAttendanceCSV}
+                  className="px-3 py-1.5 rounded-lg border border-construct-border text-construct-secondary hover:bg-construct-muted text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                  title="Export Muster Roll as CSV"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Export CSV</span>
+                </button>
+                <button
+                  onClick={() => setIsAttendanceModalOpen(true)}
+                  className="px-3 py-1.5 rounded-lg bg-construct-orange text-white text-xs font-bold hover:bg-construct-orangeHover flex items-center gap-1.5 shadow-sm cursor-pointer transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Add Gang Headcount & Pay</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Filter Toolbar */}
+            <div className="p-3 bg-construct-bg border-b border-construct-border flex flex-col sm:flex-row sm:items-center gap-2.5 text-xs">
+              <div className="flex items-center gap-1.5 text-construct-secondary font-mono text-[11px] shrink-0">
+                <Filter className="w-3.5 h-3.5" />
+                <span>Filters:</span>
+              </div>
+
+              {/* Date Filter */}
+              <select
+                value={filterDate}
+                onChange={(e) => setFilterDate(e.target.value)}
+                className="p-1.5 border border-construct-border rounded-lg bg-construct-surface text-xs font-mono focus:outline-none focus:border-construct-orange"
+              >
+                <option value="all">All Dates ({allAvailableDates.length})</option>
+                {allAvailableDates.map((d) => (
+                  <option key={d} value={d}>
+                    Date: {d}
+                  </option>
+                ))}
+              </select>
+
+              {/* Skill Filter */}
+              <select
+                value={filterSkill}
+                onChange={(e) => setFilterSkill(e.target.value)}
+                className="p-1.5 border border-construct-border rounded-lg bg-construct-surface text-xs focus:outline-none focus:border-construct-orange"
+              >
+                <option value="all">All Skill Levels</option>
+                <option value="skilled">Skilled (Mistri / Ustad)</option>
+                <option value="semi_skilled">Semi-Skilled (Junior / Assistant)</option>
+                <option value="helper">Helper & Unskilled (Mazdoor)</option>
+                <option value="operator">Plant & Machinery Operator</option>
+              </select>
+
+              {/* Search Box */}
+              <div className="relative flex-1">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-2 text-construct-secondary" />
+                <input
+                  type="text"
+                  placeholder="Search trade, contractor, or notes..."
+                  value={filterSearch}
+                  onChange={(e) => setFilterSearch(e.target.value)}
+                  className="w-full pl-8 pr-3 py-1.5 border border-construct-border rounded-lg bg-construct-surface text-xs focus:outline-none focus:border-construct-orange"
+                />
+              </div>
+
+              {(filterDate !== "all" || filterSkill !== "all" || filterSearch) && (
+                <button
+                  onClick={() => {
+                    setFilterDate("all");
+                    setFilterSkill("all");
+                    setFilterSearch("");
+                  }}
+                  className="text-xs text-rose-600 hover:text-rose-700 underline font-semibold px-1 shrink-0"
+                >
+                  Clear Filters
+                </button>
+              )}
+            </div>
+
+            {/* Table */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-construct-border bg-construct-bg text-[11px] font-mono font-bold text-construct-secondary">
+                    <th className="py-3 px-3.5">DATE & SHIFT</th>
+                    <th className="py-3 px-3.5">TRADE CATEGORY</th>
+                    <th className="py-3 px-3.5">SKILL LEVEL</th>
+                    <th className="py-3 px-3.5 text-center">FULL DAY (1.0)</th>
+                    <th className="py-3 px-3.5 text-center">HALF DAY (0.5)</th>
+                    <th className="py-3 px-3.5 text-center">TOTAL WORKERS</th>
+                    <th className="py-3 px-3.5 text-right">DAILY WAGE RATE</th>
+                    <th className="py-3 px-3.5 text-right font-extrabold text-emerald-800">TOTAL PAY TODAY</th>
+                    <th className="py-3 px-3.5">CONTRACTOR / GANG</th>
+                    <th className="py-3 px-3.5">LOCATION & NOTES</th>
+                    <th className="py-3 px-3.5 text-center">ACTION</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-construct-border/60">
+                  {filteredAttendance.length === 0 ? (
+                    <tr>
+                      <td colSpan={11} className="py-8 text-center text-construct-secondary">
+                        <Users className="w-8 h-8 mx-auto text-construct-secondary/40 mb-2" />
+                        <p className="font-semibold text-xs">No attendance entries matching criteria</p>
+                        <p className="text-[11px] text-construct-secondary/70">
+                          Adjust your filters or click &ldquo;Add Gang Headcount & Pay&rdquo; to record attendance.
+                        </p>
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredAttendance.map((att) => {
+                      const fDays = att.full_day_count !== undefined ? att.full_day_count : att.headcount;
+                      const hDays = att.half_day_count || 0;
+                      const rate = att.daily_wage_rate || 750;
+                      const linePay =
+                        att.total_payout !== undefined && att.total_payout !== null
+                          ? att.total_payout
+                          : Math.round((fDays * rate) + (hDays * rate * 0.5));
+
+                      const skill = att.skill_level || "skilled";
+
+                      return (
+                        <tr key={att.id} className="hover:bg-construct-muted/40 transition-colors">
+                          <td className="py-3 px-3.5">
+                            <span className="font-mono font-bold text-construct-text block">{att.date}</span>
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-mono font-semibold bg-blue-50 text-blue-800 uppercase inline-block mt-0.5">
+                              {att.shift} shift
+                            </span>
+                          </td>
+
+                          <td className="py-3 px-3.5 font-bold text-construct-text">
+                            {att.labor_category}
+                          </td>
+
+                          <td className="py-3 px-3.5">
+                            {skill === "skilled" && (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                Skilled (Mistri)
+                              </span>
+                            )}
+                            {skill === "semi_skilled" && (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                Semi-Skilled
+                              </span>
+                            )}
+                            {skill === "helper" && (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-teal-50 text-teal-800 border border-teal-200">
+                                Helper / Unskilled
+                              </span>
+                            )}
+                            {skill === "operator" && (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-50 text-purple-800 border border-purple-200">
+                                Operator
+                              </span>
+                            )}
+                          </td>
+
+                          <td className="py-3 px-3.5 text-center font-mono font-semibold text-construct-text">
+                            {fDays}
+                          </td>
+
+                          <td className="py-3 px-3.5 text-center font-mono font-semibold text-construct-secondary">
+                            {hDays > 0 ? (
+                              <span className="text-amber-700 font-bold bg-amber-50 px-1.5 py-0.5 rounded">
+                                {hDays}
+                              </span>
+                            ) : (
+                              "0"
+                            )}
+                          </td>
+
+                          <td className="py-3 px-3.5 text-center">
+                            <span className="font-mono font-black text-construct-text text-sm bg-construct-muted/60 px-2 py-0.5 rounded-lg border border-construct-border/60">
+                              {att.headcount}
+                            </span>
+                          </td>
+
+                          <td className="py-3 px-3.5 text-right font-mono text-construct-secondary">
+                            ₹{rate.toLocaleString("en-IN")}/day
+                          </td>
+
+                          <td className="py-3 px-3.5 text-right">
+                            <span className="font-mono font-black text-emerald-700 text-sm bg-emerald-50 px-2.5 py-1 rounded-md border border-emerald-200 inline-block">
+                              ₹{linePay.toLocaleString("en-IN")}
+                            </span>
+                          </td>
+
+                          <td className="py-3 px-3.5 text-construct-secondary font-medium">
+                            {att.contractor_name || "Direct Site Labor"}
+                          </td>
+
+                          <td className="py-3 px-3.5 text-construct-secondary max-w-[200px] truncate" title={att.notes || ""}>
+                            {att.notes || "—"}
+                          </td>
+
+                          <td className="py-3 px-3.5 text-center">
+                            <button
+                              onClick={() => handleDeleteAttendance(att.id, att.labor_category)}
+                              className="p-1.5 rounded hover:bg-rose-50 text-construct-secondary hover:text-rose-600 transition-colors cursor-pointer"
+                              title="Delete attendance entry"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+
+                {/* Grand Total Footer Row */}
+                {filteredAttendance.length > 0 && (
+                  <tfoot>
+                    <tr className="bg-construct-bg border-t-2 border-construct-border font-bold text-xs">
+                      <td colSpan={3} className="py-3 px-3.5 font-heading text-construct-text uppercase text-[11px] font-black">
+                        Total ({filteredAttendance.length} Gang Entries)
+                      </td>
+                      <td className="py-3 px-3.5 text-center font-mono text-construct-text font-black text-sm">
+                        {totalFullDaysFiltered}
+                      </td>
+                      <td className="py-3 px-3.5 text-center font-mono text-amber-800 font-black text-sm">
+                        {totalHalfDaysFiltered}
+                      </td>
+                      <td className="py-3 px-3.5 text-center">
+                        <span className="font-mono font-black text-blue-900 bg-blue-100 px-2.5 py-1 rounded-md text-sm border border-blue-200">
+                          {totalHeadcountFiltered} Workers
+                        </span>
+                      </td>
+                      <td className="py-3 px-3.5 text-right text-[11px] font-mono text-construct-secondary">
+                        Summary
+                      </td>
+                      <td className="py-3 px-3.5 text-right">
+                        <span className="font-mono font-black text-base text-white bg-emerald-700 px-3 py-1 rounded-lg shadow-xs inline-block">
+                          ₹{totalWagesPayableFiltered.toLocaleString("en-IN")}
+                        </span>
+                      </td>
+                      <td colSpan={3} className="py-3 px-3.5 text-[11px] font-mono text-construct-secondary">
+                        Verified by Site Supervisor
+                      </td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+          </div>
+
           {/* Graphical Labor Workforce Trend */}
           <div className="bg-construct-surface border border-construct-border rounded-xl p-5 shadow-subtle">
             <div className="flex items-center justify-between pb-3 border-b border-construct-border mb-4">
@@ -471,59 +961,6 @@ function SupervisorPortalContent() {
               </span>
             </div>
             <LaborHeadcountChart data={laborData} height={250} />
-          </div>
-
-          <div className="bg-construct-surface border border-construct-border rounded-xl shadow-subtle overflow-hidden">
-            <div className="p-4 border-b border-construct-border flex items-center justify-between">
-              <div>
-                <h3 className="font-heading font-bold text-sm text-construct-text">
-                  On-Site Labor Headcount & Trade Attendance
-                </h3>
-                <p className="text-xs text-construct-secondary">
-                  Recorded daily by Site Supervisor to verify workforce presence before shift sign-off.
-                </p>
-              </div>
-              <button
-                onClick={() => setIsAttendanceModalOpen(true)}
-                className="px-3 py-1.5 rounded-lg bg-construct-orange text-white text-xs font-bold hover:bg-construct-orangeHover flex items-center gap-1 shadow-sm cursor-pointer"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Add Gang Headcount</span>
-              </button>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="border-b border-construct-border bg-construct-bg text-[11px] font-mono font-bold text-construct-secondary">
-                    <th className="py-3 px-4">DATE</th>
-                    <th className="py-3 px-4">TRADE / CATEGORY</th>
-                    <th className="py-3 px-4">HEADCOUNT</th>
-                    <th className="py-3 px-4">SHIFT</th>
-                    <th className="py-3 px-4">CONTRACTOR / GANG</th>
-                    <th className="py-3 px-4">ASSIGNMENT / NOTES</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-construct-border/60">
-                  {attendanceList.map((att) => (
-                    <tr key={att.id} className="hover:bg-construct-muted/40 transition-colors">
-                      <td className="py-3 px-4 font-mono font-bold text-construct-text">{att.date}</td>
-                      <td className="py-3 px-4 font-semibold text-construct-text">{att.labor_category}</td>
-                      <td className="py-3 px-4 font-mono font-bold text-emerald-700 text-sm">
-                        {att.headcount} Workers
-                      </td>
-                      <td className="py-3 px-4">
-                        <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-50 text-blue-800 uppercase">
-                          {att.shift} Shift
-                        </span>
-                      </td>
-                      <td className="py-3 px-4 text-construct-secondary">{att.contractor_name || "Direct Site Labor"}</td>
-                      <td className="py-3 px-4 text-construct-secondary">{att.notes || "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
           </div>
         </div>
       )}
@@ -829,20 +1266,27 @@ function SupervisorPortalContent() {
         </div>
       )}
 
-      {/* MODAL 1: Add Daily Attendance */}
+      {/* MODAL 1: Add Daily Attendance & Worker Pay */}
       {isAttendanceModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-construct-text/40 backdrop-blur-sm animate-in fade-in duration-150">
-          <div className="w-full max-w-md bg-construct-surface border border-construct-border rounded-xl shadow-elevated p-6 animate-in zoom-in-95 duration-150">
+          <div className="w-full max-w-lg bg-construct-surface border border-construct-border rounded-xl shadow-elevated p-6 animate-in zoom-in-95 duration-150 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-construct-border">
-              <h3 className="font-heading font-extrabold text-base text-construct-text">
-                Record Gang Attendance (Work 1)
-              </h3>
+              <div>
+                <h3 className="font-heading font-extrabold text-base text-construct-text flex items-center gap-2">
+                  <Users className="w-4 h-4 text-construct-orange" />
+                  <span>Record Gang Attendance & Daily Wages</span>
+                </h3>
+                <p className="text-xs text-construct-secondary">
+                  Log gang presence by skill tier, full/half day shifts, and daily wage payout.
+                </p>
+              </div>
               <button onClick={() => setIsAttendanceModalOpen(false)} className="text-construct-secondary hover:text-construct-text cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <form onSubmit={handleSaveAttendance} className="space-y-4 mt-4 text-xs">
+              {/* Date & Shift */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-construct-text mb-1">Date *</label>
@@ -868,33 +1312,156 @@ function SupervisorPortalContent() {
                 </div>
               </div>
 
-              <div>
-                <label className="block font-bold text-construct-text mb-1">Trade / Category *</label>
-                <select
-                  value={laborCategory}
-                  onChange={(e) => setLaborCategory(e.target.value)}
-                  className="w-full p-2 border border-construct-border rounded-lg bg-construct-bg text-xs focus:outline-none focus:border-construct-orange"
-                >
-                  <option value="Carpenters (Shuttering)">Carpenters (Shuttering & Formwork)</option>
-                  <option value="Bar Benders (Rebar)">Bar Benders (Rebar & Mesh)</option>
-                  <option value="Masons (Brick & Block)">Masons (Brickwork & Plaster)</option>
-                  <option value="Helpers / Unskilled Labor">Helpers & Unskilled Labor</option>
-                  <option value="Electricians">Electricians & Conduit Workers</option>
-                  <option value="Plumbers">Plumbers & Sanitary Fitters</option>
-                  <option value="Plant & Machinery Operators">Machinery & Crane Operators</option>
-                </select>
+              {/* Trade Category & Skill Level */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-construct-text mb-1">Trade / Category *</label>
+                  <select
+                    value={laborCategory}
+                    onChange={(e) => setLaborCategory(e.target.value)}
+                    className="w-full p-2 border border-construct-border rounded-lg bg-construct-bg text-xs focus:outline-none focus:border-construct-orange"
+                  >
+                    <option value="Carpenters (Shuttering)">Carpenters (Shuttering & Formwork)</option>
+                    <option value="Bar Benders (Rebar)">Bar Benders (Rebar & Mesh)</option>
+                    <option value="Masons (Brick & Block)">Masons (Brickwork & Plaster)</option>
+                    <option value="Helpers / Unskilled Labor">Helpers & Unskilled Labor</option>
+                    <option value="Electricians">Electricians & Conduit Workers</option>
+                    <option value="Plumbers">Plumbers & Sanitary Fitters</option>
+                    <option value="Plant & Machinery Operators">Machinery & Crane Operators</option>
+                    <option value="Painters & Finishing">Painters & Finishing Gang</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-construct-text mb-1">Skill Tier *</label>
+                  <select
+                    value={skillLevel}
+                    onChange={(e) => handleSkillLevelChange(e.target.value as LaborSkillLevel)}
+                    className="w-full p-2 border border-construct-border rounded-lg bg-construct-bg text-xs focus:outline-none focus:border-construct-orange font-semibold"
+                  >
+                    <option value="skilled">Skilled (Mistri / Ustad)</option>
+                    <option value="semi_skilled">Semi-Skilled (Junior / Assistant)</option>
+                    <option value="helper">Helper & Unskilled (Mazdoor / Beldar)</option>
+                    <option value="operator">Plant & Machinery Operator</option>
+                  </select>
+                </div>
               </div>
 
+              {/* Attendance Breakdown: Full Day (1.0) & Half Day (0.5) */}
+              <div className="p-3 bg-construct-bg rounded-lg border border-construct-border space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-construct-text">Shift Breakdown & Workers *</span>
+                  <span className="font-mono text-[11px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                    Total: {Number(fullDayCount) + Number(halfDayCount)} Workers
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-construct-secondary mb-1">
+                      Full Day Workers <span className="font-mono text-[10px] text-construct-secondary">(1.0 shift)</span>
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="0"
+                      value={fullDayCount}
+                      onChange={(e) => setFullDayCount(Math.max(0, parseInt(e.target.value) || 0))}
+                      className="w-full p-2 border border-construct-border rounded-lg bg-construct-surface font-mono text-xs focus:outline-none focus:border-construct-orange"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-construct-secondary mb-1">
+                      Half Day Workers <span className="font-mono text-[10px] text-construct-secondary">(0.5 shift)</span>
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="0"
+                      value={halfDayCount}
+                      onChange={(e) => setHalfDayCount(Math.max(0, parseInt(e.target.value) || 0))}
+                      className="w-full p-2 border border-construct-border rounded-lg bg-construct-surface font-mono text-xs focus:outline-none focus:border-construct-orange"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Daily Wage Rate (₹) */}
               <div>
-                <label className="block font-bold text-construct-text mb-1">Worker Headcount *</label>
-                <input
-                  type="number"
-                  required
-                  min="1"
-                  value={headcount}
-                  onChange={(e) => setHeadcount(Number(e.target.value))}
-                  className="w-full p-2 border border-construct-border rounded-lg bg-construct-bg font-mono text-xs focus:outline-none focus:border-construct-orange"
-                />
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block font-bold text-construct-text">Daily Wage Rate per Worker (₹) *</label>
+                  <span className="text-[10px] text-construct-secondary">Quick presets:</span>
+                </div>
+                <div className="flex items-center gap-1.5 mb-2 flex-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setDailyWageRate(550)}
+                    className="px-2 py-0.5 text-[10px] font-mono rounded bg-teal-50 text-teal-800 border border-teal-200 hover:bg-teal-100 cursor-pointer"
+                  >
+                    ₹550 Helper
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDailyWageRate(750)}
+                    className="px-2 py-0.5 text-[10px] font-mono rounded bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 cursor-pointer"
+                  >
+                    ₹750 Semi
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDailyWageRate(900)}
+                    className="px-2 py-0.5 text-[10px] font-mono rounded bg-indigo-50 text-indigo-800 border border-indigo-200 hover:bg-indigo-100 cursor-pointer"
+                  >
+                    ₹900 Skilled
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDailyWageRate(1200)}
+                    className="px-2 py-0.5 text-[10px] font-mono rounded bg-purple-50 text-purple-800 border border-purple-200 hover:bg-purple-100 cursor-pointer"
+                  >
+                    ₹1,200 Operator
+                  </button>
+                </div>
+                <div className="relative">
+                  <span className="absolute left-2.5 top-2 text-construct-secondary font-mono font-bold">₹</span>
+                  <input
+                    type="number"
+                    required
+                    min="1"
+                    value={dailyWageRate}
+                    onChange={(e) => setDailyWageRate(Math.max(0, parseInt(e.target.value) || 0))}
+                    className="w-full pl-6 pr-3 py-2 border border-construct-border rounded-lg bg-construct-bg font-mono text-xs focus:outline-none focus:border-construct-orange font-bold text-construct-text"
+                  />
+                </div>
+              </div>
+
+              {/* Dynamic Live Pay Calculation Summary Box */}
+              <div className="p-3.5 bg-emerald-50/70 border border-emerald-300 rounded-xl space-y-1">
+                <div className="flex items-center justify-between text-[11px] text-emerald-900 font-semibold">
+                  <span>Wage Formula & Shift Pay Calculation:</span>
+                  <span className="font-mono text-[10px] text-emerald-700">
+                    ({fullDayCount} × 1.0) + ({halfDayCount} × 0.5) shifts
+                  </span>
+                </div>
+                <div className="text-[11px] font-mono text-emerald-800 flex justify-between">
+                  <span>Full-Day Pay: {fullDayCount} × ₹{dailyWageRate}</span>
+                  <span className="font-bold">₹{(fullDayCount * dailyWageRate).toLocaleString("en-IN")}</span>
+                </div>
+                {halfDayCount > 0 && (
+                  <div className="text-[11px] font-mono text-emerald-800 flex justify-between">
+                    <span>Half-Day Pay: {halfDayCount} × ₹{Math.round(dailyWageRate * 0.5)}</span>
+                    <span className="font-bold">₹{Math.round(halfDayCount * dailyWageRate * 0.5).toLocaleString("en-IN")}</span>
+                  </div>
+                )}
+                <div className="pt-2 border-t border-emerald-200 flex items-center justify-between">
+                  <span className="font-extrabold text-xs text-emerald-950 uppercase font-heading">
+                    Total Worker Daily Pay Today:
+                  </span>
+                  <span className="text-base font-black font-mono text-emerald-800">
+                    ₹{Math.round((fullDayCount * dailyWageRate) + (halfDayCount * dailyWageRate * 0.5)).toLocaleString("en-IN")}
+                  </span>
+                </div>
               </div>
 
               <div>
@@ -931,7 +1498,7 @@ function SupervisorPortalContent() {
                   type="submit"
                   className="px-4 py-2 rounded-lg bg-construct-orange text-white text-xs font-semibold hover:bg-construct-orangeHover cursor-pointer shadow-sm"
                 >
-                  Save Attendance Record
+                  Save Attendance & Wage Record
                 </button>
               </div>
             </form>

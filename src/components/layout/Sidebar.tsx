@@ -130,16 +130,17 @@ export function Sidebar({ activeProjectId }: SidebarProps) {
   // If user is Site Supervisor, show ONLY their designated tasks
   const supervisorNavLinks: NavItem[] = [
     { label: "Supervisor Field Desk", href: "/app/supervisor", icon: UserCheck, highlight: true },
-    { label: "Daily Labor Attendance", href: "/app/supervisor?tab=attendance", icon: Users },
+    { label: "Labor Muster & Wages", href: "/app/supervisor?tab=attendance", icon: Users, tag: "Pay" },
     { label: "Work Photos & Videos", href: "/app/supervisor?tab=photos", icon: Camera },
     { label: "Upload Bills & Receipts", href: "/app/supervisor?tab=bills", icon: Receipt },
   ];
 
-  // Navigation for Management & Engineers
+  // Navigation for Management & Engineers (Admin, PM, Site Engineer)
   const standardNavLinks: NavItem[] = [
     { label: "Overview", href: "/app/overview", icon: LayoutDashboard },
     { label: "Personnel & Roles", href: "/app/users", icon: Users, tag: "Admin" },
     { label: "Project Team", href: `/app/projects/${pId}/team`, icon: ShieldCheck, tag: "RBAC" },
+    { label: "Labor Muster & Wages", href: "/app/supervisor?tab=attendance", icon: Users, tag: "Wages" },
     { label: "Daily Site Logs", href: `/app/projects/${pId}/daily-logs`, icon: ClipboardList },
     { label: "Photos & Videos (Evidence)", href: `/app/projects/${pId}/evidence`, icon: Camera },
     { label: "Materials & Stock", href: `/app/projects/${pId}/materials`, icon: Boxes },

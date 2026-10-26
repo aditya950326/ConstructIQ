@@ -875,16 +875,35 @@ export const repository = {
   },
 
   recordAttendance(data: Omit<DailyAttendance, "id" | "created_at">): DailyAttendance {
+    const fullDays = Number(data.full_day_count) || 0;
+    const halfDays = Number(data.half_day_count) || 0;
+    const totalWorkers = (data.headcount && data.headcount > 0) ? data.headcount : (fullDays + halfDays);
+    const wageRate = Number(data.daily_wage_rate) || 0;
+    const totalPayout = data.total_payout !== undefined && data.total_payout !== null 
+      ? Number(data.total_payout) 
+      : Math.round((fullDays * wageRate) + (halfDays * wageRate * 0.5));
+
     const item: DailyAttendance = {
       ...data,
       id: `att-${Date.now()}-${Math.random().toString(36).substring(2, 5)}`,
+      full_day_count: fullDays,
+      half_day_count: halfDays,
+      headcount: totalWorkers,
+      daily_wage_rate: wageRate,
+      total_payout: totalPayout,
+      skill_level: data.skill_level || "skilled",
       created_at: new Date().toISOString(),
     };
     if (!memoryState.attendance) memoryState.attendance = [];
     memoryState.attendance.unshift(item);
     this.addAuditLog(item.project_id, "RECORD_ATTENDANCE", "attendance", item.id, {
       category: item.labor_category,
+      skill_level: item.skill_level,
       headcount: item.headcount,
+      full_days: item.full_day_count,
+      half_days: item.half_day_count,
+      daily_wage_rate: item.daily_wage_rate,
+      total_payout: item.total_payout,
       shift: item.shift,
     });
     saveState();
