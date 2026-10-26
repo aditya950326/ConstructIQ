@@ -28,6 +28,7 @@ import {
   Eye,
   Check,
   AlertCircle,
+  AlertTriangle,
   BarChart3,
   TrendingUp,
 } from "lucide-react";
@@ -953,6 +954,19 @@ function SupervisorPortalContent() {
             </div>
 
             <form onSubmit={handleSavePhoto} className="space-y-4 mt-4 text-xs">
+              {/* Geotag Strict Warning in Red */}
+              <div className="p-3.5 rounded-xl bg-red-50 border-2 border-red-500 shadow-xs flex items-start gap-2.5">
+                <AlertTriangle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-heading font-black text-xs text-red-700 uppercase tracking-wide">
+                    STRICT GEOTAG COMPLIANCE REQUIREMENT
+                  </p>
+                  <p className="text-xs font-bold text-red-600 leading-snug mt-1">
+                    WARNING: Strictly upload only Geotag photos & videos (with active GPS coordinates, latitude/longitude, and camera timestamp watermark). Any non-geotagged media will be rejected during engineer inspection!
+                  </p>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-construct-text mb-1">Media Type *</label>

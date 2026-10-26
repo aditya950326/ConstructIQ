@@ -4,7 +4,6 @@ import React, { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  ShieldCheck,
   Lock,
   Mail,
   AlertCircle,
@@ -55,12 +54,6 @@ export default function LoginPage() {
     }, 200);
   };
 
-  const fillAdminCredentials = () => {
-    setEmail("adityabirare01@gmail.com");
-    setPassword("Aditya@123");
-    setErrorMessage("");
-  };
-
   return (
     <div className="min-h-screen w-full relative overflow-x-hidden flex items-center justify-center lg:justify-end bg-zinc-950 font-sans selection:bg-construct-orange/30 selection:text-construct-text">
       {/* 1. Actual Background Image (Full Viewport) */}
@@ -94,27 +87,6 @@ export default function LoginPage() {
             </p>
           </div>
 
-          {/* Default Super Admin Credential Helper Card */}
-          <div className="mt-6 p-4 rounded-2xl bg-[#faf5ff] border border-[#e9d5ff] text-xs transition-all">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-[#581c87] font-bold">
-                <ShieldCheck className="w-4 h-4 text-[#7e22ce] shrink-0" />
-                <span>Default System Administrator</span>
-              </div>
-              <button
-                type="button"
-                onClick={fillAdminCredentials}
-                className="text-[11px] font-mono font-bold text-[#7e22ce] hover:text-[#581c87] underline flex items-center gap-1 cursor-pointer"
-              >
-                Auto-fill
-              </button>
-            </div>
-            <div className="mt-2 text-[11px] font-mono text-[#3b0764] space-y-0.5">
-              <div>Email: <span className="font-bold select-all">adityabirare01@gmail.com</span></div>
-              <div>Password: <span className="font-bold select-all">Aditya@123</span></div>
-            </div>
-          </div>
-
           {/* Validation Feedback */}
           {errorMessage && (
             <div className="mt-4 p-3 rounded-xl bg-red-50 border border-red-200 text-xs text-red-700 flex items-center gap-2 animate-in fade-in duration-150">
@@ -137,7 +109,7 @@ export default function LoginPage() {
                   autoComplete="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="adityabirare01@gmail.com"
+                  placeholder="name@constructiq.io"
                   className="w-full pl-10 pr-3.5 py-2.5 text-xs text-zinc-900 bg-transparent rounded-xl focus:outline-none font-medium placeholder:text-zinc-400"
                 />
               </div>

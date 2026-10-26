@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Search, Bell, Plus, Database, Sparkles, LogOut, Check, CheckCircle2, ClipboardCheck } from "lucide-react";
+import { Search, Bell, Plus, Database, Sparkles, LogOut, Check, CheckCircle2, ClipboardCheck, PanelLeft } from "lucide-react";
 import { repository } from "@/lib/data/repository";
 import { Profile } from "@/types/database";
 import { GlobalSearchModal } from "@/components/search/GlobalSearchModal";
@@ -67,7 +67,20 @@ export function Header({ title, subtitle, activeProjectId, actions }: HeaderProp
     <>
       <header className="h-16 border-b border-construct-border bg-construct-surface px-6 flex items-center justify-between shrink-0 sticky top-0 z-20">
         {/* Title & Context */}
-        <div className="flex items-center gap-4 min-w-0">
+        <div className="flex items-center gap-3.5 min-w-0">
+          <button
+            type="button"
+            onClick={() => {
+              if (typeof window !== "undefined") {
+                window.dispatchEvent(new CustomEvent("constructiq-toggle-sidebar"));
+              }
+            }}
+            className="p-1.5 rounded-lg border border-construct-border/80 bg-construct-bg hover:bg-construct-muted text-construct-secondary hover:text-construct-text transition-colors cursor-pointer shrink-0"
+            title="Toggle Sidebar Open / Close [Ctrl+B]"
+          >
+            <PanelLeft className="w-4 h-4" />
+          </button>
+
           <div>
             <div className="flex items-center gap-2.5">
               <h1 className="font-heading font-bold text-lg text-construct-text tracking-tight truncate">

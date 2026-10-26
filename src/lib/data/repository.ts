@@ -129,25 +129,25 @@ function getInitialState(): StoreState {
   return {
     currentUserRole: "super_admin",
     currentUserId: "a0000000-0000-0000-0000-000000000001",
-    profiles: initialProfiles,
-    projects: initialProjects,
-    memberships: initialProjectMemberships,
-    hierarchy: initialHierarchy,
-    activities: initialActivities,
-    dependencies: initialDependencies,
-    materials: initialMaterials,
-    stockMovements: initialStockMovements,
-    dailyLogs: initialDailyLogs,
-    dailyLogActivities: initialDailyLogActivities,
-    evidence: initialEvidence,
-    expenses: initialExpenses,
-    inspections: initialInspections,
-    qualityIssues: initialQualityIssues,
-    safetyObservations: initialSafetyObservations,
-    correctiveActions: initialCorrectiveActions,
-    notifications: initialNotifications,
-    auditLogs: initialAuditLogs,
-    attendance: initialAttendance,
+    profiles: initialProfiles.map((p) => ({ ...p, assigned_project_ids: p.assigned_project_ids ? [...p.assigned_project_ids] : undefined })),
+    projects: initialProjects.map((p) => ({ ...p })),
+    memberships: initialProjectMemberships.map((m) => ({ ...m })),
+    hierarchy: [...initialHierarchy],
+    activities: initialActivities.map((a) => ({ ...a })),
+    dependencies: [...initialDependencies],
+    materials: initialMaterials.map((m) => ({ ...m })),
+    stockMovements: initialStockMovements.map((s) => ({ ...s })),
+    dailyLogs: initialDailyLogs.map((d) => ({ ...d })),
+    dailyLogActivities: initialDailyLogActivities.map((da) => ({ ...da })),
+    evidence: initialEvidence.map((e) => ({ ...e, tags: e.tags ? [...e.tags] : [] })),
+    expenses: initialExpenses.map((ex) => ({ ...ex })),
+    inspections: [...initialInspections],
+    qualityIssues: [...initialQualityIssues],
+    safetyObservations: [...initialSafetyObservations],
+    correctiveActions: [...initialCorrectiveActions],
+    notifications: [...initialNotifications],
+    auditLogs: [...initialAuditLogs],
+    attendance: [...initialAttendance],
     dismissedRisks: {},
   };
 }
@@ -232,6 +232,116 @@ export const repository = {
     }
   },
 
+  getProfileById(userId: string): Profile | undefined {
+    return memoryState.profiles.find((p) => p.id === userId);
+  },
+
+  createProfile(data: {
+    full_name: string;
+    email: string;
+    password?: string;
+    role: UserRole;
+    phone?: string;
+    assigned_project_ids?: string[];
+  }): { success: boolean; user?: Profile; error?: string } {
+    const cleanEmail = (data.email || "").trim().toLowerCase();
+    if (!cleanEmail || !data.full_name) {
+      return { success: false, error: "Full name and email are required." };
+    }
+
+    const existing = memoryState.profiles.find((p) => (p.email || "").toLowerCase() === cleanEmail);
+    if (existing) {
+      return { success: false, error: `A user with email ${cleanEmail} already exists.` };
+    }
+
+    const newProfile: Profile = {
+      id: `usr-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      email: cleanEmail,
+      full_name: data.full_name.trim(),
+      role: data.role,
+      password: data.password?.trim() || "Construct@123",
+      phone: data.phone?.trim() || "",
+      assigned_project_ids: data.assigned_project_ids || (memoryState.projects[0] ? [memoryState.projects[0].id] : []),
+      created_at: new Date().toISOString(),
+    };
+
+    memoryState.profiles.push(newProfile);
+
+    // If assigned projects, link memberships
+    if (newProfile.assigned_project_ids && newProfile.assigned_project_ids.length > 0) {
+      for (const prjId of newProfile.assigned_project_ids) {
+        let memRole: "manager" | "engineer" | "supervisor" | "viewer" = "viewer";
+        if (newProfile.role === "super_admin" || newProfile.role === "project_manager") memRole = "manager";
+        else if (newProfile.role === "site_engineer") memRole = "engineer";
+        else if (newProfile.role === "site_supervisor") memRole = "supervisor";
+
+        memoryState.memberships.push({
+          id: `mem-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          project_id: prjId,
+          user_id: newProfile.id,
+          project_role: memRole,
+          created_at: new Date().toISOString(),
+        });
+      }
+    }
+
+    saveState();
+    return { success: true, user: newProfile };
+  },
+
+  updateProfile(
+    userId: string,
+    data: Partial<Omit<Profile, "id">>
+  ): { success: boolean; user?: Profile; error?: string } {
+    const profile = memoryState.profiles.find((p) => p.id === userId);
+    if (!profile) {
+      return { success: false, error: "User profile not found." };
+    }
+
+    if (data.email) {
+      const cleanEmail = data.email.trim().toLowerCase();
+      const duplicate = memoryState.profiles.find(
+        (p) => p.id !== userId && (p.email || "").toLowerCase() === cleanEmail
+      );
+      if (duplicate) {
+        return { success: false, error: `Email ${cleanEmail} is already taken by another user.` };
+      }
+      profile.email = cleanEmail;
+    }
+
+    if (data.full_name !== undefined) profile.full_name = data.full_name.trim();
+    if (data.role !== undefined) profile.role = data.role;
+    if (data.password !== undefined && data.password.trim().length > 0) profile.password = data.password.trim();
+    if (data.phone !== undefined) profile.phone = data.phone.trim();
+    if (data.assigned_project_ids !== undefined) profile.assigned_project_ids = data.assigned_project_ids;
+
+    // If current logged in user was modified, sync session
+    if (memoryState.currentUserId === userId) {
+      memoryState.currentUserRole = profile.role;
+    }
+
+    saveState();
+    return { success: true, user: profile };
+  },
+
+  deleteProfile(userId: string): { success: boolean; error?: string } {
+    const currentUser = this.getCurrentUser();
+    if (currentUser.id === userId) {
+      return { success: false, error: "Cannot delete your own active administrator account." };
+    }
+
+    const index = memoryState.profiles.findIndex((p) => p.id === userId);
+    if (index === -1) {
+      return { success: false, error: "User not found." };
+    }
+
+    memoryState.profiles.splice(index, 1);
+    memoryState.memberships = memoryState.memberships.filter((m) => m.user_id !== userId);
+
+    saveState();
+    return { success: true };
+  },
+
   // Authenticate user with email and password
   authenticate(
     email: string,
@@ -240,27 +350,16 @@ export const repository = {
     const cleanEmail = (email || "").trim().toLowerCase();
     const cleanPass = (password || "").trim();
 
-    // Default Super Admin hardcoded rule: adityabirare01@gmail.com / Aditya@123
-    if (cleanEmail === "adityabirare01@gmail.com") {
-      if (cleanPass === "Aditya@123") {
-        let admin = memoryState.profiles.find((p) => p.role === "super_admin");
-        if (!admin) {
-          admin = initialProfiles[0];
-          memoryState.profiles.unshift(admin);
-        }
-        admin.email = "adityabirare01@gmail.com";
-        admin.password = "Aditya@123";
-        this.setCurrentUser(admin);
-        return { success: true, user: admin };
-      } else {
-        return { success: false, error: "Incorrect password for Super Administrator." };
-      }
-    }
-
-    // Lookup profile by email (case-insensitive)
-    const profile = memoryState.profiles.find(
+    // 1. Look up profile by email from active state
+    let profile = memoryState.profiles.find(
       (p) => (p.email || "").toLowerCase() === cleanEmail
     );
+
+    // Fallback for default super admin if not found in state
+    if (!profile && cleanEmail === "adityabirare01@gmail.com") {
+      profile = initialProfiles[0];
+      memoryState.profiles.unshift(profile);
+    }
 
     if (!profile) {
       return {
@@ -269,9 +368,15 @@ export const repository = {
       };
     }
 
-    // Check password if set
-    if (profile.password && profile.password !== cleanPass) {
-      return { success: false, error: "Incorrect password for this account." };
+    // Check password: match profile.password (or default fallback Aditya@123 if cleanEmail is default admin)
+    const expectedPassword = profile.password || (cleanEmail === "adityabirare01@gmail.com" ? "Aditya@123" : "");
+    if (expectedPassword && expectedPassword !== cleanPass) {
+      return {
+        success: false,
+        error: cleanEmail === "adityabirare01@gmail.com"
+          ? "Incorrect password for Super Administrator."
+          : "Incorrect password for this account.",
+      };
     }
 
     // Set current active user & session
