@@ -244,6 +244,23 @@ export default function UsersDirectoryPage() {
     userPass?: string,
     phoneNum?: string
   ) => {
+    const cleanPhone = (phoneNum || "").replace(/[^0-9]/g, "");
+
+    // For non-admin team members: connect on WhatsApp WITHOUT exposing login email ID or password
+    if (!isAdmin) {
+      const roleTitle = getRoleTitle(role);
+      const contactMsg = `Hello ${fullName} (${roleTitle}), reaching out regarding ConstructIQ project site operations.`;
+      const waUrl =
+        cleanPhone && cleanPhone.length >= 10
+          ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(contactMsg)}`
+          : `https://api.whatsapp.com/send?text=${encodeURIComponent(contactMsg)}`;
+
+      if (typeof window !== "undefined") {
+        window.open(waUrl, "_blank");
+      }
+      return;
+    }
+
     const origin = typeof window !== "undefined" ? window.location.origin : "https://constructiq.io";
     const roleTitle = getRoleTitle(role);
     const pass = userPass || "Aditya@123";
@@ -262,10 +279,10 @@ export default function UsersDirectoryPage() {
       `_Strict notice: Please strictly upload Geotag photos & recordings during daily site activities._`,
     ].join("\n");
 
-    const cleanPhone = (phoneNum || "").replace(/[^0-9]/g, "");
-    const waUrl = cleanPhone && cleanPhone.length >= 10
-      ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`
-      : `https://api.whatsapp.com/send?text=${encodeURIComponent(message)}`;
+    const waUrl =
+      cleanPhone && cleanPhone.length >= 10
+        ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`
+        : `https://api.whatsapp.com/send?text=${encodeURIComponent(message)}`;
 
     if (typeof window !== "undefined") {
       window.open(waUrl, "_blank");
@@ -273,6 +290,13 @@ export default function UsersDirectoryPage() {
   };
 
   const copyCredentials = (user: Profile) => {
+    if (!isAdmin) {
+      setFeedback({
+        type: "error",
+        message: "Access restricted: Login passwords can only be viewed and copied by Super Admin.",
+      });
+      return;
+    }
     const text = `ConstructIQ Login Credentials:\nRole: ${getRoleTitle(user.role)}\nEmail: ${user.email}\nPassword: ${user.password || "Aditya@123"}\nLogin: ${window.location.origin}/login`;
     navigator.clipboard?.writeText(text);
     setCopiedId(user.id);
@@ -360,12 +384,28 @@ export default function UsersDirectoryPage() {
 
         <div className="flex items-center gap-3">
           <div className="text-right text-xs">
-            <span className="px-3 py-1 rounded-md bg-purple-50 text-purple-900 border border-purple-200 font-bold font-mono inline-block">
-              ADMIN CONTROL PANEL
+            <span
+              className={`px-3 py-1 rounded-md font-bold font-mono inline-block ${
+                isAdmin
+                  ? "bg-purple-50 text-purple-900 border border-purple-200"
+                  : "bg-slate-100 text-slate-800 border border-slate-300"
+              }`}
+            >
+              {isAdmin ? "ADMIN CONTROL PANEL" : "AUTHORIZED TEAM DIRECTORY"}
             </span>
           </div>
         </div>
       </div>
+
+      {/* Role-Based Privacy Notice for Non-Admin Viewers */}
+      {!isAdmin && (
+        <div className="p-3.5 bg-blue-50 border border-blue-200 rounded-xl text-xs flex items-center gap-2.5 text-blue-900 shadow-xs">
+          <ShieldCheck className="w-4 h-4 text-blue-700 shrink-0" />
+          <span>
+            <strong>Role-Based Privacy:</strong> Login Email IDs &amp; Passwords are restricted exclusively to Super Admin. Team members only view colleagues&apos; names, contact numbers, and working posts/designations.
+          </span>
+        </div>
+      )}
 
       {/* Personnel Roster & Quick Controls */}
       <div className="bg-construct-surface border border-construct-border rounded-xl shadow-subtle overflow-hidden">
@@ -386,7 +426,7 @@ export default function UsersDirectoryPage() {
               <Search className="w-3.5 h-3.5 text-construct-secondary absolute left-2.5 top-2.5 pointer-events-none" />
               <input
                 type="text"
-                placeholder="Search name, email, phone..."
+                placeholder={isAdmin ? "Search name, email, phone..." : "Search name, phone..."}
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-8 pr-3 py-1.5 text-xs rounded-lg border border-construct-border bg-construct-bg text-construct-text focus:outline-none focus:border-construct-orange w-48 sm:w-60"
@@ -411,20 +451,72 @@ export default function UsersDirectoryPage() {
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="border-b border-construct-border bg-construct-bg text-[11px] font-mono font-bold text-construct-secondary">
-                <th className="py-3 px-4">PERSONNEL</th>
-                <th className="py-3 px-4">ASSIGNED ROLE</th>
-                <th className="py-3 px-4">LOGIN EMAIL</th>
-                <th className="py-3 px-4">PASSWORD</th>
-                <th className="py-3 px-4">WHATSAPP / PHONE</th>
-                <th className="py-3 px-4 text-right">ADMIN ACTIONS</th>
-              </tr>
+              {isAdmin ? (
+                <tr className="border-b border-construct-border bg-construct-bg text-[11px] font-mono font-bold text-construct-secondary">
+                  <th className="py-3 px-4">PERSONNEL</th>
+                  <th className="py-3 px-4">ASSIGNED ROLE</th>
+                  <th className="py-3 px-4">LOGIN EMAIL</th>
+                  <th className="py-3 px-4">PASSWORD</th>
+                  <th className="py-3 px-4">WHATSAPP / PHONE</th>
+                  <th className="py-3 px-4 text-right">ADMIN ACTIONS</th>
+                </tr>
+              ) : (
+                <tr className="border-b border-construct-border bg-construct-bg text-[11px] font-mono font-bold text-construct-secondary">
+                  <th className="py-3 px-4">PERSONNEL (NAME)</th>
+                  <th className="py-3 px-4">POST / DESIGNATION</th>
+                  <th className="py-3 px-4">CONTACT NUMBER</th>
+                  <th className="py-3 px-4 text-right">CONNECT</th>
+                </tr>
+              )}
             </thead>
             <tbody className="divide-y divide-construct-border/60">
               {filteredProfiles.map((p) => {
                 const isPasswordRevealed = revealedPasswords[p.id];
                 const displayPassword = p.password || "Aditya@123";
 
+                if (!isAdmin) {
+                  // Non-admin view: ONLY show name, post/role they are working on, and contact phone number. Passwords & login IDs are hidden!
+                  return (
+                    <tr key={p.id} className="hover:bg-construct-muted/40 transition-colors">
+                      <td className="py-3.5 px-4 font-bold text-construct-text">
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-full bg-construct-text text-white flex items-center justify-center text-xs font-bold shrink-0">
+                            {p.full_name.charAt(0)}
+                          </div>
+                          <div>
+                            <p className="font-heading font-bold text-construct-text leading-tight">{p.full_name}</p>
+                            <span className="text-[10px] font-mono text-construct-secondary">ID: {p.id.slice(0, 12)}</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="py-3.5 px-4">{getRoleBadge(p.role)}</td>
+                      <td className="py-3.5 px-4 font-mono">
+                        {p.phone ? (
+                          <span className="text-construct-text font-bold text-xs">{p.phone}</span>
+                        ) : (
+                          <span className="text-construct-secondary/60 italic text-xs font-sans">Not provided</span>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-4 text-right">
+                        {p.phone ? (
+                          <button
+                            type="button"
+                            onClick={() => handleWhatsAppShare(p.full_name, p.role, p.email, undefined, p.phone)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold shadow-xs transition-colors cursor-pointer"
+                            title={`Chat with ${p.full_name} on WhatsApp`}
+                          >
+                            <WhatsAppIcon className="w-3.5 h-3.5" />
+                            <span>WhatsApp</span>
+                          </button>
+                        ) : (
+                          <span className="text-[11px] text-construct-secondary italic">No direct number</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                }
+
+                // Super Admin View: Full control with Login Email, Password (toggleable), and Admin Actions
                 return (
                   <tr key={p.id} className="hover:bg-construct-muted/40 transition-colors">
                     <td className="py-3 px-4 font-bold text-construct-text">

@@ -159,6 +159,13 @@ export default function ProjectTeamPage() {
   };
 
   const copyCredentials = (userEmail: string, userPass?: string) => {
+    if (!isAdmin) {
+      setFeedbackMsg({
+        type: "error",
+        text: "Access restricted: Login passwords can only be viewed and copied by Super Admin.",
+      });
+      return;
+    }
     const text = `Email: ${userEmail}\nPassword: ${userPass || "Construct@123"}`;
     navigator.clipboard?.writeText(text);
     setCopiedEmail(userEmail);
@@ -172,6 +179,21 @@ export default function ProjectTeamPage() {
     userPass?: string,
     phoneNum?: string
   ) => {
+    const cleanPhone = (phoneNum || "").replace(/[^0-9]/g, "");
+
+    // Non-admin colleagues can only initiate a normal WhatsApp chat (NO passwords!)
+    if (!isAdmin) {
+      const contactMsg = `Hello ${fullName} (${roleTitle}), reaching out regarding ${project?.name || "project"} site operations on ConstructIQ.`;
+      const waUrl =
+        cleanPhone && cleanPhone.length >= 10
+          ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(contactMsg)}`
+          : `https://api.whatsapp.com/send?text=${encodeURIComponent(contactMsg)}`;
+      if (typeof window !== "undefined") {
+        window.open(waUrl, "_blank");
+      }
+      return;
+    }
+
     const origin = typeof window !== "undefined" ? window.location.origin : "https://constructiq.io";
     const pass = userPass || "Construct@123";
     const message = [
@@ -188,10 +210,10 @@ export default function ProjectTeamPage() {
       `_Strict Notice: Always upload Geotag photos/videos during daily site inspections._`,
     ].join("\n");
 
-    const cleanPhone = (phoneNum || "").replace(/[^0-9]/g, "");
-    const waUrl = cleanPhone && cleanPhone.length >= 10
-      ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`
-      : `https://api.whatsapp.com/send?text=${encodeURIComponent(message)}`;
+    const waUrl =
+      cleanPhone && cleanPhone.length >= 10
+        ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`
+        : `https://api.whatsapp.com/send?text=${encodeURIComponent(message)}`;
 
     if (typeof window !== "undefined") {
       window.open(waUrl, "_blank");
@@ -401,29 +423,31 @@ export default function ProjectTeamPage() {
                   )
                 }
                 className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold flex items-center gap-1 transition-colors shadow-xs cursor-pointer"
-                title="Share credentials directly to WhatsApp"
+                title={isAdmin ? "Share credentials directly to WhatsApp" : "Chat on WhatsApp"}
               >
                 <WhatsAppIcon className="w-3.5 h-3.5" />
                 <span>WhatsApp</span>
               </button>
-              <button
-                type="button"
-                onClick={() => copyCredentials(projectManager.email, projectManager.password)}
-                className="px-2.5 py-1.5 rounded-lg border border-construct-border hover:bg-construct-surface text-[11px] font-mono text-construct-secondary hover:text-construct-text flex items-center gap-1 transition-colors"
-                title="Copy login email and password"
-              >
-                {copiedEmail === projectManager.email ? (
-                  <>
-                    <Check className="w-3 h-3 text-emerald-600" />
-                    <span>Copied!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3 h-3" />
-                    <span>Copy Login</span>
-                  </>
-                )}
-              </button>
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => copyCredentials(projectManager.email, projectManager.password)}
+                  className="px-2.5 py-1.5 rounded-lg border border-construct-border hover:bg-construct-surface text-[11px] font-mono text-construct-secondary hover:text-construct-text flex items-center gap-1 transition-colors cursor-pointer"
+                  title="Copy login email and password"
+                >
+                  {copiedEmail === projectManager.email ? (
+                    <>
+                      <Check className="w-3 h-3 text-emerald-600" />
+                      <span>Copied!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3 h-3" />
+                      <span>Copy Login</span>
+                    </>
+                  )}
+                </button>
+              )}
             </div>
           </div>
         ) : (
@@ -490,18 +514,20 @@ export default function ProjectTeamPage() {
                           eng.phone
                         )
                       }
-                      title="Share login credentials to WhatsApp"
+                      title={isAdmin ? "Share login credentials to WhatsApp" : "Chat on WhatsApp"}
                       className="p-1 rounded text-emerald-700 hover:text-white hover:bg-emerald-600 transition-colors cursor-pointer"
                     >
                       <WhatsAppIcon className="w-3.5 h-3.5" />
                     </button>
-                    <button
-                      onClick={() => copyCredentials(eng.email, eng.password)}
-                      title="Copy login credentials"
-                      className="p-1 rounded text-construct-secondary hover:text-construct-text hover:bg-construct-muted cursor-pointer"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                    </button>
+                    {isAdmin && (
+                      <button
+                        onClick={() => copyCredentials(eng.email, eng.password)}
+                        title="Copy login credentials"
+                        className="p-1 rounded text-construct-secondary hover:text-construct-text hover:bg-construct-muted cursor-pointer"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                     {canAssignPersonnel && (
                       <button
                         onClick={() => handleRemoveMember(eng.id, eng.full_name)}
@@ -569,18 +595,20 @@ export default function ProjectTeamPage() {
                           sup.phone
                         )
                       }
-                      title="Share login credentials to WhatsApp"
+                      title={isAdmin ? "Share login credentials to WhatsApp" : "Chat on WhatsApp"}
                       className="p-1 rounded text-emerald-700 hover:text-white hover:bg-emerald-600 transition-colors cursor-pointer"
                     >
                       <WhatsAppIcon className="w-3.5 h-3.5" />
                     </button>
-                    <button
-                      onClick={() => copyCredentials(sup.email, sup.password)}
-                      title="Copy login credentials"
-                      className="p-1 rounded text-construct-secondary hover:text-construct-text hover:bg-construct-muted cursor-pointer"
-                    >
-                      <Copy className="w-3.5 h-3.5" />
-                    </button>
+                    {isAdmin && (
+                      <button
+                        onClick={() => copyCredentials(sup.email, sup.password)}
+                        title="Copy login credentials"
+                        className="p-1 rounded text-construct-secondary hover:text-construct-text hover:bg-construct-muted cursor-pointer"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                     {canAssignPersonnel && (
                       <button
                         onClick={() => handleRemoveMember(sup.id, sup.full_name)}
@@ -603,10 +631,12 @@ export default function ProjectTeamPage() {
         <div className="p-4 border-b border-construct-border flex items-center justify-between">
           <div>
             <h3 className="font-heading font-bold text-sm text-construct-text">
-              Project Personnel Authentication & Access Directory
+              Project Personnel {isAdmin ? "Authentication & Access Directory" : "Team Roster"}
             </h3>
             <p className="text-xs text-construct-secondary">
-              All active users assigned to this project can authenticate at the ConstructIQ Sign In portal using their credentials.
+              {isAdmin
+                ? "All active users assigned to this project can authenticate at the ConstructIQ Sign In portal using their credentials."
+                : "Active team members and engineers assigned to this project."}
             </p>
           </div>
         </div>
@@ -614,31 +644,43 @@ export default function ProjectTeamPage() {
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs">
             <thead>
-              <tr className="border-b border-construct-border bg-construct-bg text-[11px] font-mono font-bold text-construct-secondary">
-                <th className="py-3 px-4">NAME</th>
-                <th className="py-3 px-4">ROLE</th>
-                <th className="py-3 px-4">LOGIN EMAIL</th>
-                <th className="py-3 px-4">PASSWORD STATUS</th>
-                <th className="py-3 px-4">ACCESS SCOPE</th>
-                <th className="py-3 px-4">ACTIONS</th>
-              </tr>
+              {isAdmin ? (
+                <tr className="border-b border-construct-border bg-construct-bg text-[11px] font-mono font-bold text-construct-secondary">
+                  <th className="py-3 px-4">NAME</th>
+                  <th className="py-3 px-4">ROLE</th>
+                  <th className="py-3 px-4">LOGIN EMAIL</th>
+                  <th className="py-3 px-4">PASSWORD STATUS</th>
+                  <th className="py-3 px-4">ACCESS SCOPE</th>
+                  <th className="py-3 px-4">ACTIONS</th>
+                </tr>
+              ) : (
+                <tr className="border-b border-construct-border bg-construct-bg text-[11px] font-mono font-bold text-construct-secondary">
+                  <th className="py-3 px-4">NAME</th>
+                  <th className="py-3 px-4">POST / ROLE</th>
+                  <th className="py-3 px-4">CONTACT NUMBER</th>
+                  <th className="py-3 px-4">ACCESS SCOPE</th>
+                </tr>
+              )}
             </thead>
             <tbody className="divide-y divide-construct-border/60">
               {/* Default Admin */}
               <tr className="hover:bg-purple-50/30 transition-colors">
                 <td className="py-3 px-4 font-bold text-construct-text">Aditya Birare</td>
                 <td className="py-3 px-4 font-mono font-bold text-purple-700">SUPER ADMIN</td>
-                <td className="py-3 px-4 font-mono">adityabirare01@gmail.com</td>
-                <td className="py-3 px-4 font-mono text-construct-secondary">Aditya@123</td>
+                {isAdmin && <td className="py-3 px-4 font-mono">adityabirare01@gmail.com</td>}
+                {isAdmin && <td className="py-3 px-4 font-mono text-construct-secondary">Aditya@123</td>}
+                {!isAdmin && <td className="py-3 px-4 font-mono text-construct-text font-medium">+91 98765 43210</td>}
                 <td className="py-3 px-4 text-purple-900 font-medium">All Working Projects Oversight & PM Assignment</td>
-                <td className="py-3 px-4">
-                  <button
-                    onClick={() => copyCredentials("adityabirare01@gmail.com", "Aditya@123")}
-                    className="text-[11px] font-mono text-purple-700 hover:underline flex items-center gap-1"
-                  >
-                    <Copy className="w-3 h-3" /> Copy
-                  </button>
-                </td>
+                {isAdmin && (
+                  <td className="py-3 px-4">
+                    <button
+                      onClick={() => copyCredentials("adityabirare01@gmail.com", "Aditya@123")}
+                      className="text-[11px] font-mono text-purple-700 hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      <Copy className="w-3 h-3" /> Copy
+                    </button>
+                  </td>
+                )}
               </tr>
 
               {/* PM */}
@@ -646,19 +688,28 @@ export default function ProjectTeamPage() {
                 <tr className="hover:bg-orange-50/30 transition-colors">
                   <td className="py-3 px-4 font-bold text-construct-text">{projectManager.full_name}</td>
                   <td className="py-3 px-4 font-mono font-bold text-construct-orange">PROJECT MANAGER</td>
-                  <td className="py-3 px-4 font-mono">{projectManager.email}</td>
-                  <td className="py-3 px-4 font-mono text-construct-secondary">
-                    {projectManager.password ? "••••••••" : "Default Set"}
-                  </td>
+                  {isAdmin && <td className="py-3 px-4 font-mono">{projectManager.email}</td>}
+                  {isAdmin && (
+                    <td className="py-3 px-4 font-mono text-construct-secondary">
+                      {projectManager.password ? "••••••••" : "Default Set"}
+                    </td>
+                  )}
+                  {!isAdmin && (
+                    <td className="py-3 px-4 font-mono text-construct-text font-medium">
+                      {projectManager.phone || <span className="text-construct-secondary/60 italic font-sans">Not provided</span>}
+                    </td>
+                  )}
                   <td className="py-3 px-4 text-construct-text font-medium">Full Project Data, Approvals & Staff Assignment</td>
-                  <td className="py-3 px-4">
-                    <button
-                      onClick={() => copyCredentials(projectManager.email, projectManager.password)}
-                      className="text-[11px] font-mono text-construct-orange hover:underline flex items-center gap-1"
-                    >
-                      <Copy className="w-3 h-3" /> Copy
-                    </button>
-                  </td>
+                  {isAdmin && (
+                    <td className="py-3 px-4">
+                      <button
+                        onClick={() => copyCredentials(projectManager.email, projectManager.password)}
+                        className="text-[11px] font-mono text-construct-orange hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <Copy className="w-3 h-3" /> Copy
+                      </button>
+                    </td>
+                  )}
                 </tr>
               )}
 
@@ -667,19 +718,28 @@ export default function ProjectTeamPage() {
                 <tr key={eng.id} className="hover:bg-emerald-50/30 transition-colors">
                   <td className="py-3 px-4 font-bold text-construct-text">{eng.full_name}</td>
                   <td className="py-3 px-4 font-mono font-bold text-emerald-700">SITE ENGINEER</td>
-                  <td className="py-3 px-4 font-mono">{eng.email}</td>
-                  <td className="py-3 px-4 font-mono text-construct-secondary">
-                    {eng.password ? "••••••••" : "Configured"}
-                  </td>
+                  {isAdmin && <td className="py-3 px-4 font-mono">{eng.email}</td>}
+                  {isAdmin && (
+                    <td className="py-3 px-4 font-mono text-construct-secondary">
+                      {eng.password ? "••••••••" : "Configured"}
+                    </td>
+                  )}
+                  {!isAdmin && (
+                    <td className="py-3 px-4 font-mono text-construct-text font-medium">
+                      {eng.phone || <span className="text-construct-secondary/60 italic font-sans">Not provided</span>}
+                    </td>
+                  )}
                   <td className="py-3 px-4 text-construct-secondary">Daily Logs, QA Checklists & Video/Photo Uploads</td>
-                  <td className="py-3 px-4">
-                    <button
-                      onClick={() => copyCredentials(eng.email, eng.password)}
-                      className="text-[11px] font-mono text-emerald-700 hover:underline flex items-center gap-1"
-                    >
-                      <Copy className="w-3 h-3" /> Copy
-                    </button>
-                  </td>
+                  {isAdmin && (
+                    <td className="py-3 px-4">
+                      <button
+                        onClick={() => copyCredentials(eng.email, eng.password)}
+                        className="text-[11px] font-mono text-emerald-700 hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <Copy className="w-3 h-3" /> Copy
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
 
@@ -688,19 +748,28 @@ export default function ProjectTeamPage() {
                 <tr key={sup.id} className="hover:bg-blue-50/30 transition-colors">
                   <td className="py-3 px-4 font-bold text-construct-text">{sup.full_name}</td>
                   <td className="py-3 px-4 font-mono font-bold text-blue-700">SITE SUPERVISOR</td>
-                  <td className="py-3 px-4 font-mono">{sup.email}</td>
-                  <td className="py-3 px-4 font-mono text-construct-secondary">
-                    {sup.password ? "••••••••" : "Configured"}
-                  </td>
+                  {isAdmin && <td className="py-3 px-4 font-mono">{sup.email}</td>}
+                  {isAdmin && (
+                    <td className="py-3 px-4 font-mono text-construct-secondary">
+                      {sup.password ? "••••••••" : "Configured"}
+                    </td>
+                  )}
+                  {!isAdmin && (
+                    <td className="py-3 px-4 font-mono text-construct-text font-medium">
+                      {sup.phone || <span className="text-construct-secondary/60 italic font-sans">Not provided</span>}
+                    </td>
+                  )}
                   <td className="py-3 px-4 text-construct-secondary">Field Desk Attendance, Work Photos & Challans</td>
-                  <td className="py-3 px-4">
-                    <button
-                      onClick={() => copyCredentials(sup.email, sup.password)}
-                      className="text-[11px] font-mono text-blue-700 hover:underline flex items-center gap-1"
-                    >
-                      <Copy className="w-3 h-3" /> Copy
-                    </button>
-                  </td>
+                  {isAdmin && (
+                    <td className="py-3 px-4">
+                      <button
+                        onClick={() => copyCredentials(sup.email, sup.password)}
+                        className="text-[11px] font-mono text-blue-700 hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <Copy className="w-3 h-3" /> Copy
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
