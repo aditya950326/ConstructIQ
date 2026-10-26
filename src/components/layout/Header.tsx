@@ -1,11 +1,12 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Search, Bell, Plus, Database, Sparkles, LogOut, Check } from "lucide-react";
+import { Search, Bell, Plus, Database, Sparkles, LogOut, Check, CheckCircle2, ClipboardCheck } from "lucide-react";
 import { repository } from "@/lib/data/repository";
 import { Profile } from "@/types/database";
 import { GlobalSearchModal } from "@/components/search/GlobalSearchModal";
 import { NotificationDrawer } from "@/components/notifications/NotificationDrawer";
+import { SupervisorApprovalsModal } from "@/components/approvals/SupervisorApprovalsModal";
 import { isSupabaseConfigured } from "@/lib/supabase/client";
 
 interface HeaderProps {
@@ -19,24 +20,33 @@ export function Header({ title, subtitle, activeProjectId, actions }: HeaderProp
   const [currentUser, setCurrentUser] = useState<Profile | null>(null);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isNotifOpen, setIsNotifOpen] = useState(false);
+  const [isApprovalsOpen, setIsApprovalsOpen] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [pendingApprovalsCount, setPendingApprovalsCount] = useState(0);
+  const [isCloudConfigured, setIsCloudConfigured] = useState(false);
 
   useEffect(() => {
+    setIsCloudConfigured(isSupabaseConfigured());
     const syncUser = () => {
-      setCurrentUser(repository.getCurrentUser());
+      const user = repository.getCurrentUser();
+      setCurrentUser(user);
       const notifs = repository.getNotifications();
       setUnreadCount(notifs.filter((n) => !n.is_read).length);
+      const summary = repository.getSupervisorApprovalsSummary(activeProjectId);
+      setPendingApprovalsCount(summary.currentRolePendingCount);
     };
 
     syncUser();
     window.addEventListener("constructiq-role-change", syncUser);
+    window.addEventListener("constructiq-data-update", syncUser);
     window.addEventListener("storage", syncUser);
 
     return () => {
       window.removeEventListener("constructiq-role-change", syncUser);
+      window.removeEventListener("constructiq-data-update", syncUser);
       window.removeEventListener("storage", syncUser);
     };
-  }, []);
+  }, [activeProjectId]);
 
   const getRoleBadge = (role?: string) => {
     switch (role) {
@@ -76,6 +86,54 @@ export function Header({ title, subtitle, activeProjectId, actions }: HeaderProp
         <div className="flex items-center gap-3">
           {/* Custom page actions if passed */}
           {actions}
+
+          {/* Supabase Cloud Live Status Indicator */}
+          <a
+            href="/app/settings"
+            className={`hidden sm:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-all ${
+              isCloudConfigured
+                ? "border-emerald-500/30 bg-emerald-50/80 text-emerald-700 hover:bg-emerald-100/80 hover:border-emerald-500"
+                : "border-construct-border bg-construct-bg text-construct-secondary hover:bg-construct-muted"
+            }`}
+            title={
+              isCloudConfigured
+                ? "Supabase PostgreSQL Live Cloud Sync Active - Click to view status & table counts"
+                : "Local Store Mode - Click to configure Supabase cloud database"
+            }
+          >
+            <span className="relative flex h-2 w-2">
+              {isCloudConfigured && (
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              )}
+              <span
+                className={`relative inline-flex rounded-full h-2 w-2 ${
+                  isCloudConfigured ? "bg-emerald-500" : "bg-amber-400"
+                }`}
+              ></span>
+            </span>
+            <span className="text-[11px] font-mono">
+              {isCloudConfigured ? "Supabase Live" : "Local Mode"}
+            </span>
+          </a>
+
+          {/* Supervisor Field Approvals Trigger (for Site Engineer, PM & Admin) */}
+          {currentUser?.role !== "site_supervisor" && (
+            <button
+              onClick={() => setIsApprovalsOpen(true)}
+              className="relative flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-construct-border bg-construct-surface hover:bg-construct-muted text-xs font-semibold text-construct-text transition-colors cursor-pointer"
+              title="Supervisor Field Approvals (Bills & Photos)"
+            >
+              <ClipboardCheck className="w-3.5 h-3.5 text-construct-orange" />
+              <span className="hidden sm:inline">Approvals</span>
+              {pendingApprovalsCount > 0 ? (
+                <span className="px-1.5 py-0.2 rounded-full bg-construct-orange text-white text-[10px] font-bold font-mono">
+                  {pendingApprovalsCount}
+                </span>
+              ) : (
+                <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+              )}
+            </button>
+          )}
 
           {/* Quick Search Button */}
           <button
@@ -132,6 +190,11 @@ export function Header({ title, subtitle, activeProjectId, actions }: HeaderProp
       </header>
 
       {/* Global Modals */}
+      <SupervisorApprovalsModal
+        isOpen={isApprovalsOpen}
+        onClose={() => setIsApprovalsOpen(false)}
+        activeProjectId={activeProjectId}
+      />
       <GlobalSearchModal
         isOpen={isSearchOpen}
         onClose={() => setIsSearchOpen(false)}

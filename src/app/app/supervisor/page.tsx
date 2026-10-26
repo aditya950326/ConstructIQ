@@ -90,22 +90,67 @@ function SupervisorPortalContent() {
   const [isUploadingReceipt, setIsUploadingReceipt] = useState(false);
   const receiptFileInputRef = useRef<HTMLInputElement>(null);
 
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [currentRole, setCurrentRole] = useState<any>("site_supervisor");
+
+  // Rejection modal
+  const [rejectingItem, setRejectingItem] = useState<{ type: "photo" | "bill"; id: string; title: string } | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
+
   useEffect(() => {
     loadData();
+    window.addEventListener("constructiq-data-update", loadData);
+    window.addEventListener("constructiq-role-change", loadData);
+    return () => {
+      window.removeEventListener("constructiq-data-update", loadData);
+      window.removeEventListener("constructiq-role-change", loadData);
+    };
   }, [projectId]);
 
   const loadData = () => {
+    setCurrentUser(repository.getCurrentUser());
+    setCurrentRole(repository.getCurrentUserRole());
     setAttendanceList(repository.getAttendance(projectId));
     setEvidenceList(
       repository
-        .getEvidence(projectId)
+        .getAllEvidence(projectId)
         .filter((e) => e.evidence_type === "photo" || e.evidence_type === "video")
     );
-    setBillsList(repository.getExpenses(projectId));
+    setBillsList(repository.getAllExpenses(projectId));
     const acts = repository.getActivities(projectId);
     setActivities(acts);
     if (acts.length > 0 && !photoActivityId) setPhotoActivityId(acts[0].id);
     setNodes(repository.getHierarchy(projectId));
+  };
+
+  const handleApprovePhotoDirect = (photo: EvidenceFile) => {
+    if (currentRole === "site_engineer") {
+      repository.approveEvidenceByEngineer(photo.id, currentUser?.id, `Approved on site by Site Engineer ${currentUser?.full_name || ""}`);
+    } else {
+      repository.approveEvidenceByManager(photo.id, currentUser?.id, `Authorized and verified by Project Manager ${currentUser?.full_name || ""}`);
+    }
+    loadData();
+  };
+
+  const handleApproveBillDirect = (bill: Expense) => {
+    if (currentRole === "site_engineer") {
+      repository.approveExpenseByEngineer(bill.id, currentUser?.id, `Voucher and receipt verified by Site Engineer ${currentUser?.full_name || ""}`);
+    } else {
+      repository.approveExpenseByManager(bill.id, currentUser?.id, `Payment disbursement authorized by Project Manager ${currentUser?.full_name || ""}`);
+    }
+    loadData();
+  };
+
+  const handleConfirmReject = () => {
+    if (!rejectingItem) return;
+    if (rejectingItem.type === "photo") {
+      repository.rejectEvidence(rejectingItem.id, currentUser?.id, rejectReason || "Rejected during inspection");
+    } else {
+      repository.rejectExpense(rejectingItem.id, currentUser?.id, rejectReason || "Rejected during audit");
+    }
+    setRejectingItem(null);
+    setRejectReason("");
+    loadData();
   };
 
   // Submit Work 1: Attendance
@@ -179,11 +224,13 @@ function SupervisorPortalContent() {
         title: photoTitle,
         description: photoNotes || `Site execution ${mediaType} logged by supervisor`,
         uploader_id: user.id,
+        uploader_role: "site_supervisor",
         file_path: finalFilePath,
         file_type: finalFileType,
         file_size_bytes: finalSize,
         capture_date: new Date().toISOString(),
-        review_status: "verified",
+        review_status: "unreviewed",
+        approval_status: "pending_engineer",
         tags: ["supervisor-media", "field-execution", mediaType],
       });
 
@@ -225,6 +272,8 @@ function SupervisorPortalContent() {
         receiptUrl = `indexeddb://${receiptId}`;
       }
 
+      const user = repository.getCurrentUser();
+
       repository.addExpense({
         project_id: projectId,
         category: billCategory,
@@ -233,7 +282,9 @@ function SupervisorPortalContent() {
         currency: "INR",
         payee: billPayee,
         description: billDesc,
-        status: "submitted",
+        status: "pending_engineer",
+        uploader_id: user.id,
+        uploader_role: "site_supervisor",
         receipt_url: receiptUrl,
       });
 
@@ -526,8 +577,22 @@ function SupervisorPortalContent() {
                         </span>
                       </div>
                       <div className="absolute top-2.5 right-2.5 pointer-events-none">
-                        <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800 shadow-xs">
-                          VERIFIED
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold shadow-xs ${
+                          item.approval_status === "approved"
+                            ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
+                            : item.approval_status === "pending_manager"
+                            ? "bg-blue-100 text-blue-800 border border-blue-200"
+                            : item.approval_status === "rejected"
+                            ? "bg-rose-100 text-rose-800 border border-rose-200"
+                            : "bg-amber-100 text-amber-800 border border-amber-200"
+                        }`}>
+                          {item.approval_status === "approved"
+                            ? "APPROVED BY PM"
+                            : item.approval_status === "pending_manager"
+                            ? "AWAITING PM APPROVAL"
+                            : item.approval_status === "rejected"
+                            ? "REJECTED"
+                            : "AWAITING SITE ENG"}
                         </span>
                       </div>
                     </div>
@@ -543,8 +608,63 @@ function SupervisorPortalContent() {
                           {act.code}: {act.name}
                         </div>
                       )}
+
+                      {/* 3-Stage Governance Stepper */}
+                      <div className="mt-3 space-y-1 pt-2.5 border-t border-construct-border/60 text-[10px] font-mono bg-construct-bg/50 p-2 rounded-lg">
+                        <div className="flex items-center gap-1.5 text-construct-secondary">
+                          <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                          <span>1. Uploaded by Supervisor</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          {item.approval_status === "pending_engineer" ? (
+                            <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
+                          ) : item.approval_status === "rejected" ? (
+                            <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                          ) : (
+                            <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                          )}
+                          <span className={item.approval_status === "pending_engineer" ? "text-amber-800 font-bold" : "text-construct-secondary"}>
+                            2. Site Engineer: {item.engineer_approved_by ? "Approved" : "Pending Verification"}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          {item.approval_status === "approved" ? (
+                            <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                          ) : item.approval_status === "pending_manager" ? (
+                            <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+                          ) : (
+                            <span className="w-2 h-2 rounded-full bg-construct-border"></span>
+                          )}
+                          <span className={item.approval_status === "approved" ? "text-emerald-700 font-bold" : item.approval_status === "pending_manager" ? "text-blue-700 font-bold" : "text-construct-secondary"}>
+                            3. Project Manager: {item.approval_status === "approved" ? "Authorized" : "Awaiting Sign-off"}
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   </div>
+
+                  {/* Physical Action Buttons on Card for Site Engineer / PM */}
+                  {((currentRole === "site_engineer" && item.approval_status === "pending_engineer") ||
+                    ((currentRole === "project_manager" || currentRole === "super_admin") && item.approval_status === "pending_manager")) && (
+                    <div className="p-3 bg-construct-bg border-t border-construct-border flex items-center justify-between gap-2" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        onClick={() => setRejectingItem({ type: "photo", id: item.id, title: item.title })}
+                        className="px-2.5 py-1 rounded text-[11px] font-bold border border-rose-300 text-rose-700 hover:bg-rose-50 cursor-pointer"
+                      >
+                        Reject
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleApprovePhotoDirect(item)}
+                        className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold flex items-center gap-1 shadow-xs cursor-pointer active:scale-95"
+                      >
+                        <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                        <span>{currentRole === "site_engineer" ? "Approve Photo (Eng)" : "Authorize (PM)"}</span>
+                      </button>
+                    </div>
+                  )}
+
                   <div className="p-4 pt-2 border-t border-construct-border/60 text-[11px] font-mono text-construct-secondary flex items-center justify-between">
                     <span>Captured: {item.capture_date ? new Date(item.capture_date).toLocaleDateString() : "Today"}</span>
                     <span className="uppercase text-[10px] font-bold text-construct-orange flex items-center gap-1">
@@ -589,7 +709,7 @@ function SupervisorPortalContent() {
                   Site Bills, Delivery Challans & Petty Cash Vouchers
                 </h3>
                 <p className="text-xs text-construct-secondary">
-                  Supervisor uploads invoices and fuel receipts for Project Manager commercial verification.
+                  Supervisor uploads invoices and fuel receipts. First approved by Site Engineer, then authorized by Project Manager.
                 </p>
               </div>
               <button
@@ -611,7 +731,8 @@ function SupervisorPortalContent() {
                     <th className="py-3 px-4">DESCRIPTION / BILL ITEMS</th>
                     <th className="py-3 px-4">AMOUNT (INR)</th>
                     <th className="py-3 px-4">RECEIPT</th>
-                    <th className="py-3 px-4">STATUS</th>
+                    <th className="py-3 px-4">APPROVAL STAGE</th>
+                    <th className="py-3 px-4 text-right">ACTION</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-construct-border/60">
@@ -639,11 +760,64 @@ function SupervisorPortalContent() {
                         )}
                       </td>
                       <td className="py-3 px-4">
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
-                          bill.status === "approved" ? "bg-emerald-100 text-emerald-800" : "bg-orange-100 text-construct-orange"
-                        }`}>
-                          {bill.status.toUpperCase()}
-                        </span>
+                        {bill.status === "pending_engineer" ? (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                            1. AWAITING SITE ENG
+                          </span>
+                        ) : bill.status === "pending_manager" ? (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-100 text-blue-800 border border-blue-200">
+                            2. AWAITING PM SIGN-OFF
+                          </span>
+                        ) : bill.status === "approved" ? (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                            3. FULLY APPROVED
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-100 text-rose-800 border border-rose-200">
+                            REJECTED
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        {currentRole === "site_engineer" && bill.status === "pending_engineer" ? (
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setRejectingItem({ type: "bill", id: bill.id, title: `${bill.payee} (₹${bill.amount})` })}
+                              className="px-2 py-1 rounded text-[10px] font-bold border border-rose-300 text-rose-700 hover:bg-rose-50 cursor-pointer"
+                            >
+                              Reject
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleApproveBillDirect(bill)}
+                              className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold flex items-center gap-1 shadow-xs cursor-pointer active:scale-95"
+                            >
+                              <Check className="w-3 h-3 stroke-[2.5]" />
+                              <span>Approve (Eng)</span>
+                            </button>
+                          </div>
+                        ) : (currentRole === "project_manager" || currentRole === "super_admin") && bill.status === "pending_manager" ? (
+                          <div className="flex items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setRejectingItem({ type: "bill", id: bill.id, title: `${bill.payee} (₹${bill.amount})` })}
+                              className="px-2 py-1 rounded text-[10px] font-bold border border-rose-300 text-rose-700 hover:bg-rose-50 cursor-pointer"
+                            >
+                              Reject
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleApproveBillDirect(bill)}
+                              className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-700 text-white text-[10px] font-bold flex items-center gap-1 shadow-xs cursor-pointer active:scale-95"
+                            >
+                              <Check className="w-3 h-3 stroke-[2.5]" />
+                              <span>Authorize (PM)</span>
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-[11px] font-mono text-construct-secondary">In Order</span>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -1068,6 +1242,50 @@ function SupervisorPortalContent() {
                 className="px-4 py-2 rounded-lg bg-construct-text text-white text-xs font-bold hover:bg-black transition-colors cursor-pointer"
               >
                 Close Voucher
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* REJECT MODAL */}
+      {rejectingItem && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-construct-surface border border-construct-border rounded-xl shadow-elevated p-5 space-y-4">
+            <h3 className="font-heading font-bold text-sm text-rose-700 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4" />
+              <span>Return / Reject {rejectingItem.type === "photo" ? "Photo" : "Bill"}</span>
+            </h3>
+            <p className="text-xs text-construct-text">
+              Item: <strong>{rejectingItem.title}</strong>
+            </p>
+            <div>
+              <label className="block text-xs font-bold text-construct-text mb-1">
+                Reason for Return / Rejection Note *
+              </label>
+              <textarea
+                rows={3}
+                required
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                placeholder="e.g. Please re-check voucher total or rebar cover..."
+                className="w-full p-2.5 border border-construct-border rounded-lg bg-construct-bg text-xs focus:outline-none focus:border-rose-500"
+              />
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setRejectingItem(null)}
+                className="px-3 py-1.5 rounded-lg border border-construct-border text-construct-secondary text-xs font-bold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmReject}
+                className="px-4 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 cursor-pointer"
+              >
+                Confirm Rejection
               </button>
             </div>
           </div>

@@ -1,8 +1,9 @@
 "use client";
 
-import React from "react";
+import React, { useEffect } from "react";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
+import { repository } from "@/lib/data/repository";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -19,6 +20,13 @@ export function AppShell({
   activeProjectId,
   headerActions,
 }: AppShellProps) {
+  useEffect(() => {
+    // Attempt remote hydration from Supabase once on app load
+    repository.hydrateFromSupabase().catch((err) => {
+      console.warn("Background Supabase hydration:", err);
+    });
+  }, []);
+
   return (
     <div className="flex h-screen bg-construct-bg overflow-hidden text-construct-text">
       {/* Fixed Sidebar */}

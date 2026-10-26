@@ -133,6 +133,8 @@ export interface DailyLogActivity {
 
 export type EvidenceType = "photo" | "video" | "drawing" | "document" | "inspection_sheet" | "rfi" | "material_receipt" | "certificate";
 
+export type ApprovalStatus = "pending_engineer" | "pending_manager" | "approved" | "rejected";
+
 export interface EvidenceFile {
   id: string;
   project_id: string;
@@ -143,12 +145,21 @@ export interface EvidenceFile {
   title: string;
   description?: string;
   uploader_id: string;
+  uploader_role?: UserRole;
   file_path: string;
   file_type: string;
   file_size_bytes: number;
   capture_date?: string;
   uploaded_at: string;
   review_status: "unreviewed" | "verified" | "flagged";
+  approval_status?: ApprovalStatus;
+  engineer_approved_by?: string;
+  engineer_approved_at?: string;
+  engineer_notes?: string;
+  manager_approved_by?: string;
+  manager_approved_at?: string;
+  manager_notes?: string;
+  rejection_reason?: string;
   tags: string[];
 }
 
@@ -183,6 +194,8 @@ export interface StockMovement {
   created_at: string;
 }
 
+export type ExpenseStatus = "draft" | "submitted" | "pending_engineer" | "pending_manager" | "approved" | "rejected";
+
 export interface Expense {
   id: string;
   project_id: string;
@@ -193,8 +206,17 @@ export interface Expense {
   currency: string;
   payee: string;
   description: string;
-  status: "draft" | "submitted" | "approved" | "rejected";
+  status: ExpenseStatus;
+  uploader_id?: string;
+  uploader_role?: UserRole;
   approved_by?: string;
+  engineer_approved_by?: string;
+  engineer_approved_at?: string;
+  engineer_notes?: string;
+  manager_approved_by?: string;
+  manager_approved_at?: string;
+  manager_notes?: string;
+  rejection_reason?: string;
   receipt_evidence_id?: string;
   receipt_url?: string;
   created_at: string;
@@ -293,7 +315,7 @@ export interface NotificationItem {
   project_id?: string;
   title: string;
   message: string;
-  type: "risk_alert" | "approval_request" | "material_shortage" | "quality_issue" | "system";
+  type: "risk_alert" | "approval_request" | "material_shortage" | "quality_issue" | "quality_alert" | "financial_alert" | "evidence_verification" | "system";
   link_url?: string;
   is_read: boolean;
   created_at: string;

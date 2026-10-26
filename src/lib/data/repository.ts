@@ -45,6 +45,7 @@ import {
 } from "./mock-data";
 
 import { evaluateProjectDelayRisks } from "../intelligence/risk-engine";
+import { supabaseSyncService } from "../supabase/sync-service";
 
 interface StoreState {
   currentUserRole: UserRole;
@@ -71,7 +72,7 @@ interface StoreState {
   dismissedRisks: Record<string, string>; // riskId -> reason
 }
 
-const STORAGE_KEY = "constructiq_db_v4";
+const STORAGE_KEY = "constructiq_db_v5";
 
 function getInitialState(): StoreState {
   if (typeof window !== "undefined") {
@@ -157,6 +158,7 @@ function saveState() {
   if (typeof window !== "undefined") {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(memoryState));
+      window.dispatchEvent(new CustomEvent("constructiq-data-update"));
     } catch (e) {
       console.warn("Failed to save to localStorage:", e);
     }
@@ -585,6 +587,7 @@ export const repository = {
       code: newProject.code,
     });
     saveState();
+    supabaseSyncService.autoSaveRecord("projects", newProject);
     return newProject;
   },
 
@@ -607,6 +610,7 @@ export const repository = {
       type: node.node_type,
     });
     saveState();
+    supabaseSyncService.autoSaveRecord("hierarchy_nodes", node);
     return node;
   },
 
@@ -631,6 +635,7 @@ export const repository = {
       name: activity.name,
     });
     saveState();
+    supabaseSyncService.autoSaveRecord("activities", activity);
     return activity;
   },
 
@@ -639,6 +644,7 @@ export const repository = {
     if (index === -1) return undefined;
     memoryState.activities[index] = { ...memoryState.activities[index], ...updates };
     saveState();
+    supabaseSyncService.autoSaveRecord("activities", memoryState.activities[index]);
     return memoryState.activities[index];
   },
 
@@ -686,6 +692,7 @@ export const repository = {
       status: newLog.status,
     });
     saveState();
+    supabaseSyncService.autoSaveRecord("daily_logs", newLog);
     return newLog;
   },
 
@@ -728,6 +735,7 @@ export const repository = {
               targetActivity.actual_start_date = log.log_date;
             }
           }
+          supabaseSyncService.autoSaveRecord("activities", targetActivity);
         }
       }
     } else if (action === "reject") {
@@ -745,6 +753,7 @@ export const repository = {
       { reviewNotes }
     );
     saveState();
+    supabaseSyncService.autoSaveRecord("daily_logs", log);
     return log;
   },
 
@@ -774,6 +783,7 @@ export const repository = {
       shift: item.shift,
     });
     saveState();
+    supabaseSyncService.autoSaveRecord("daily_attendance", item);
     return item;
   },
 
@@ -781,28 +791,166 @@ export const repository = {
     if (!memoryState.attendance) return;
     memoryState.attendance = memoryState.attendance.filter((a) => a.id !== id);
     saveState();
+    supabaseSyncService.autoDeleteRecord("daily_attendance", id);
   },
 
   // Evidence Management
-  getEvidence(projectId: string): EvidenceFile[] {
+  getEvidence(projectId: string, filterByRole: boolean = true): EvidenceFile[] {
+    const role = this.getCurrentUserRole();
     return memoryState.evidence
-      .filter((e) => e.project_id === projectId)
+      .filter((e) => {
+        if (e.project_id !== projectId) return false;
+        // If current user is Project Manager, hide supervisor uploads that haven't been approved by Site Engineer
+        if (filterByRole && role === "project_manager") {
+          const isSupervisor = e.uploader_role === "site_supervisor" || 
+            memoryState.profiles.some((p) => p.id === e.uploader_id && p.role === "site_supervisor");
+          if (isSupervisor && (e.approval_status === "pending_engineer" || (!e.approval_status && e.review_status !== "verified"))) {
+            return false; // Hidden from Project Manager until Site Engineer approves!
+          }
+        }
+        return true;
+      })
       .sort((a, b) => new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime());
   },
 
-  addEvidence(data: Omit<EvidenceFile, "id" | "uploaded_at"> & { id?: string }): EvidenceFile {
+  getAllEvidence(projectId: string): EvidenceFile[] {
+    return this.getEvidence(projectId, false);
+  },
+
+  addEvidence(data: Omit<EvidenceFile, "id" | "uploaded_at" | "review_status"> & { id?: string; review_status?: EvidenceFile["review_status"] }): EvidenceFile {
+    const user = this.getCurrentUser();
+    const isSupervisor = (data.uploader_role === "site_supervisor") || (user && user.role === "site_supervisor");
+
     const evidence: EvidenceFile = {
       ...data,
       id: data.id || `ev-${Date.now()}`,
+      uploader_role: isSupervisor ? "site_supervisor" : (data.uploader_role || user?.role || "site_engineer"),
+      review_status: isSupervisor ? (data.review_status || "unreviewed") : (data.review_status || "verified"),
+      approval_status: isSupervisor ? (data.approval_status || "pending_engineer") : (data.approval_status || "approved"),
       uploaded_at: new Date().toISOString(),
     };
     memoryState.evidence.unshift(evidence);
     this.addAuditLog(evidence.project_id, "UPLOAD_EVIDENCE", "evidence", evidence.id, {
       title: evidence.title,
       type: evidence.evidence_type,
+      approval_status: evidence.approval_status,
+      uploaded_by_role: evidence.uploader_role,
     });
+
+    if (isSupervisor) {
+      // Notify Site Engineer that supervisor submitted photo/video for technical sign-off
+      this.createNotification({
+        user_id: "a0000000-0000-0000-0000-000000000003",
+        project_id: evidence.project_id,
+        title: "Supervisor Photo Awaiting Site Engineer Approval",
+        message: `Supervisor uploaded "${evidence.title}". Please inspect and approve.`,
+        type: "evidence_verification",
+        link_url: `/app/projects/${evidence.project_id}/evidence`,
+      });
+    }
+
     saveState();
+    supabaseSyncService.autoSaveRecord("evidence_files", evidence);
     return evidence;
+  },
+
+  approveEvidenceByEngineer(evidenceId: string, engineerId?: string, notes?: string): EvidenceFile | null {
+    const ev = memoryState.evidence.find((e) => e.id === evidenceId);
+    if (!ev) return null;
+    const user = this.getCurrentUser();
+    const engId = engineerId || user?.id || "a0000000-0000-0000-0000-000000000003";
+
+    ev.approval_status = "pending_manager";
+    ev.review_status = "verified";
+    ev.engineer_approved_by = engId;
+    ev.engineer_approved_at = new Date().toISOString();
+    if (notes) ev.engineer_notes = notes;
+
+    this.addAuditLog(ev.project_id, "SITE_ENGINEER_APPROVE_PHOTO", "evidence", ev.id, {
+      title: ev.title,
+      approved_by: engId,
+      notes: notes || "Physically approved on site by Site Engineer",
+    });
+
+    // Notify Project Manager that photo has been verified by Site Engineer and is now ready for PM sign-off
+    this.createNotification({
+      user_id: "a0000000-0000-0000-0000-000000000002",
+      project_id: ev.project_id,
+      title: "Photo Approved by Site Engineer (Awaiting PM Sign-off)",
+      message: `Site Engineer approved "${ev.title}". Forwarded for Project Manager final authorization.`,
+      type: "evidence_verification",
+      link_url: `/app/projects/${ev.project_id}/evidence`,
+    });
+
+    saveState();
+    supabaseSyncService.autoSaveRecord("evidence_files", ev);
+    return ev;
+  },
+
+  approveEvidenceByManager(evidenceId: string, managerId?: string, notes?: string): EvidenceFile | null {
+    const ev = memoryState.evidence.find((e) => e.id === evidenceId);
+    if (!ev) return null;
+    const user = this.getCurrentUser();
+    const pmId = managerId || user?.id || "a0000000-0000-0000-0000-000000000002";
+
+    ev.approval_status = "approved";
+    ev.review_status = "verified";
+    ev.manager_approved_by = pmId;
+    ev.manager_approved_at = new Date().toISOString();
+    if (notes) ev.manager_notes = notes;
+
+    this.addAuditLog(ev.project_id, "PROJECT_MANAGER_APPROVE_PHOTO", "evidence", ev.id, {
+      title: ev.title,
+      approved_by: pmId,
+      notes: notes || "Final sign-off by Project Manager",
+    });
+
+    if (ev.uploader_id) {
+      this.createNotification({
+        user_id: ev.uploader_id,
+        project_id: ev.project_id,
+        title: "Site Photo Authorized by Project Manager",
+        message: `Your photo "${ev.title}" has received full approval from Project Manager.`,
+        type: "evidence_verification",
+        link_url: `/app/supervisor?tab=photos`,
+      });
+    }
+
+    saveState();
+    supabaseSyncService.autoSaveRecord("evidence_files", ev);
+    return ev;
+  },
+
+  rejectEvidence(evidenceId: string, rejectedById?: string, reason?: string): EvidenceFile | null {
+    const ev = memoryState.evidence.find((e) => e.id === evidenceId);
+    if (!ev) return null;
+    const user = this.getCurrentUser();
+    const userId = rejectedById || user?.id;
+
+    ev.approval_status = "rejected";
+    ev.review_status = "flagged";
+    ev.rejection_reason = reason || "Declined during field inspection";
+
+    this.addAuditLog(ev.project_id, "REJECT_PHOTO", "evidence", ev.id, {
+      title: ev.title,
+      rejected_by: userId,
+      reason: ev.rejection_reason,
+    });
+
+    if (ev.uploader_id) {
+      this.createNotification({
+        user_id: ev.uploader_id,
+        project_id: ev.project_id,
+        title: "Photo Returned / Rejected",
+        message: `Photo "${ev.title}" was not approved: ${ev.rejection_reason}`,
+        type: "quality_alert",
+        link_url: `/app/supervisor?tab=photos`,
+      });
+    }
+
+    saveState();
+    supabaseSyncService.autoSaveRecord("evidence_files", ev);
+    return ev;
   },
 
   // Materials & Inventory Ledger
@@ -863,20 +1011,43 @@ export const repository = {
       newStock: material.current_stock,
     });
     saveState();
+    supabaseSyncService.autoSaveRecord("stock_movements", movement);
+    supabaseSyncService.autoSaveRecord("materials", material);
     return { movement };
   },
 
   // Financials & Expenses
-  getExpenses(projectId: string): Expense[] {
+  getExpenses(projectId: string, filterByRole: boolean = true): Expense[] {
+    const role = this.getCurrentUserRole();
     return memoryState.expenses
-      .filter((e) => e.project_id === projectId)
+      .filter((e) => {
+        if (e.project_id !== projectId) return false;
+        // If current user is Project Manager, hide supervisor uploaded bills that haven't been approved by Site Engineer
+        if (filterByRole && role === "project_manager") {
+          const isSupervisor = e.uploader_role === "site_supervisor" ||
+            memoryState.profiles.some((p) => p.id === e.uploader_id && p.role === "site_supervisor");
+          if (isSupervisor && (e.status === "pending_engineer" || (e.status === "submitted" && !e.engineer_approved_by))) {
+            return false; // Hidden from Project Manager until Site Engineer approves!
+          }
+        }
+        return true;
+      })
       .sort((a, b) => new Date(b.expense_date).getTime() - new Date(a.expense_date).getTime());
   },
 
-  addExpense(data: Omit<Expense, "id" | "created_at">): Expense {
+  getAllExpenses(projectId: string): Expense[] {
+    return this.getExpenses(projectId, false);
+  },
+
+  addExpense(data: Omit<Expense, "id" | "created_at" | "status"> & { status?: Expense["status"] }): Expense {
+    const user = this.getCurrentUser();
+    const isSupervisor = (data.uploader_role === "site_supervisor") || (user && user.role === "site_supervisor");
+
     const expense: Expense = {
       ...data,
       id: `exp-${Date.now()}`,
+      uploader_role: isSupervisor ? "site_supervisor" : (data.uploader_role || user?.role || "project_manager"),
+      status: isSupervisor ? (data.status || "pending_engineer") : (data.status || "approved"),
       created_at: new Date().toISOString(),
     };
     memoryState.expenses.unshift(expense);
@@ -884,9 +1055,170 @@ export const repository = {
       amount: expense.amount,
       category: expense.category,
       payee: expense.payee,
+      status: expense.status,
+      uploaded_by_role: expense.uploader_role,
     });
+
+    if (isSupervisor) {
+      // Notify Site Engineer that supervisor submitted bill for verification
+      this.createNotification({
+        user_id: "a0000000-0000-0000-0000-000000000003",
+        project_id: expense.project_id,
+        title: "Supervisor Bill Awaiting Site Engineer Review",
+        message: `Supervisor submitted bill for ₹${expense.amount.toLocaleString()} (${expense.payee}). Requires Site Engineer approval.`,
+        type: "financial_alert",
+        link_url: `/app/projects/${expense.project_id}/financials`,
+      });
+    }
+
     saveState();
+    supabaseSyncService.autoSaveRecord("expenses", expense);
     return expense;
+  },
+
+  approveExpenseByEngineer(expenseId: string, engineerId?: string, notes?: string): Expense | null {
+    const exp = memoryState.expenses.find((e) => e.id === expenseId);
+    if (!exp) return null;
+    const user = this.getCurrentUser();
+    const engId = engineerId || user?.id || "a0000000-0000-0000-0000-000000000003";
+
+    exp.status = "pending_manager";
+    exp.engineer_approved_by = engId;
+    exp.engineer_approved_at = new Date().toISOString();
+    if (notes) exp.engineer_notes = notes;
+
+    this.addAuditLog(exp.project_id, "SITE_ENGINEER_APPROVE_EXPENSE", "expense", exp.id, {
+      payee: exp.payee,
+      amount: exp.amount,
+      approved_by: engId,
+      notes: notes || "Voucher and site goods verified by Site Engineer",
+    });
+
+    // Notify Project Manager that bill is ready for payment authorization
+    this.createNotification({
+      user_id: "a0000000-0000-0000-0000-000000000002",
+      project_id: exp.project_id,
+      title: "Bill Approved by Site Engineer (Awaiting PM Sign-off)",
+      message: `Site Engineer approved bill of ₹${exp.amount.toLocaleString()} (${exp.payee}). Forwarded for PM authorization.`,
+      type: "financial_alert",
+      link_url: `/app/projects/${exp.project_id}/financials`,
+    });
+
+    saveState();
+    supabaseSyncService.autoSaveRecord("expenses", exp);
+    return exp;
+  },
+
+  approveExpenseByManager(expenseId: string, managerId?: string, notes?: string): Expense | null {
+    const exp = memoryState.expenses.find((e) => e.id === expenseId);
+    if (!exp) return null;
+    const user = this.getCurrentUser();
+    const pmId = managerId || user?.id || "a0000000-0000-0000-0000-000000000002";
+
+    exp.status = "approved";
+    exp.approved_by = pmId;
+    exp.manager_approved_by = pmId;
+    exp.manager_approved_at = new Date().toISOString();
+    if (notes) exp.manager_notes = notes;
+
+    this.addAuditLog(exp.project_id, "PROJECT_MANAGER_APPROVE_EXPENSE", "expense", exp.id, {
+      payee: exp.payee,
+      amount: exp.amount,
+      approved_by: pmId,
+      notes: notes || "Final disbursement approved by Project Manager",
+    });
+
+    if (exp.uploader_id) {
+      this.createNotification({
+        user_id: exp.uploader_id,
+        project_id: exp.project_id,
+        title: "Site Bill Authorized & Approved by PM",
+        message: `Your site bill for ₹${exp.amount.toLocaleString()} (${exp.payee}) was approved for payment disbursement.`,
+        type: "financial_alert",
+        link_url: `/app/supervisor?tab=bills`,
+      });
+    }
+
+    saveState();
+    supabaseSyncService.autoSaveRecord("expenses", exp);
+    return exp;
+  },
+
+  rejectExpense(expenseId: string, rejectedById?: string, reason?: string): Expense | null {
+    const exp = memoryState.expenses.find((e) => e.id === expenseId);
+    if (!exp) return null;
+    const user = this.getCurrentUser();
+    const userId = rejectedById || user?.id;
+
+    exp.status = "rejected";
+    exp.rejection_reason = reason || "Declined during commercial audit";
+
+    this.addAuditLog(exp.project_id, "REJECT_EXPENSE", "expense", exp.id, {
+      payee: exp.payee,
+      amount: exp.amount,
+      rejected_by: userId,
+      reason: exp.rejection_reason,
+    });
+
+    if (exp.uploader_id) {
+      this.createNotification({
+        user_id: exp.uploader_id,
+        project_id: exp.project_id,
+        title: "Site Bill Rejected / Returned",
+        message: `Bill of ₹${exp.amount.toLocaleString()} (${exp.payee}) was not approved: ${exp.rejection_reason}`,
+        type: "financial_alert",
+        link_url: `/app/supervisor?tab=bills`,
+      });
+    }
+
+    saveState();
+    supabaseSyncService.autoSaveRecord("expenses", exp);
+    return exp;
+  },
+
+  getSupervisorApprovalsSummary(projectId?: string) {
+    const allEvidence = memoryState.evidence.filter((e) => !projectId || e.project_id === projectId);
+    const allExpenses = memoryState.expenses.filter((e) => !projectId || e.project_id === projectId);
+
+    const isSupervisor = (userId?: string, role?: string) =>
+      role === "site_supervisor" || memoryState.profiles.some((p) => p.id === userId && p.role === "site_supervisor");
+
+    const pendingEngineerPhotos = allEvidence.filter(
+      (e) => isSupervisor(e.uploader_id, e.uploader_role) && e.approval_status === "pending_engineer"
+    );
+
+    const pendingEngineerBills = allExpenses.filter(
+      (e) => isSupervisor(e.uploader_id, e.uploader_role) && e.status === "pending_engineer"
+    );
+
+    const pendingManagerPhotos = allEvidence.filter(
+      (e) => isSupervisor(e.uploader_id, e.uploader_role) && e.approval_status === "pending_manager"
+    );
+
+    const pendingManagerBills = allExpenses.filter(
+      (e) => isSupervisor(e.uploader_id, e.uploader_role) && e.status === "pending_manager"
+    );
+
+    const role = this.getCurrentUserRole();
+    let currentRolePendingCount = 0;
+    if (role === "site_engineer") {
+      currentRolePendingCount = pendingEngineerPhotos.length + pendingEngineerBills.length;
+    } else if (role === "project_manager") {
+      currentRolePendingCount = pendingManagerPhotos.length + pendingManagerBills.length;
+    } else if (role === "super_admin") {
+      currentRolePendingCount =
+        pendingEngineerPhotos.length + pendingEngineerBills.length + pendingManagerPhotos.length + pendingManagerBills.length;
+    }
+
+    return {
+      pendingEngineerPhotos,
+      pendingEngineerBills,
+      pendingManagerPhotos,
+      pendingManagerBills,
+      engineerTotal: pendingEngineerPhotos.length + pendingEngineerBills.length,
+      managerTotal: pendingManagerPhotos.length + pendingManagerBills.length,
+      currentRolePendingCount,
+    };
   },
 
   // Quality, Safety, Corrective Actions
@@ -914,6 +1246,7 @@ export const repository = {
     };
     memoryState.qualityIssues.unshift(issue);
     saveState();
+    supabaseSyncService.autoSaveRecord("quality_issues", issue);
     return issue;
   },
 
@@ -925,6 +1258,7 @@ export const repository = {
     };
     memoryState.safetyObservations.unshift(observation);
     saveState();
+    supabaseSyncService.autoSaveRecord("safety_observations", observation);
     return observation;
   },
 
@@ -935,6 +1269,7 @@ export const repository = {
     item.completed_at = new Date().toISOString();
     item.verified_by = verifiedBy;
     saveState();
+    supabaseSyncService.autoSaveRecord("corrective_actions", item);
     return item;
   },
 
@@ -1188,5 +1523,134 @@ export const repository = {
     }
 
     return results;
+  },
+
+  // Remote Hydration from Supabase Cloud
+  async hydrateFromSupabase(): Promise<{ success: boolean; message: string; remoteCounts?: Record<string, number> }> {
+    try {
+      const res = await supabaseSyncService.pullRemoteData();
+      if (!res.success || !res.data) {
+        return { success: false, message: res.error || "Failed to pull remote Supabase data" };
+      }
+      const d = res.data;
+      let updated = false;
+
+      if (Array.isArray(d.projects) && d.projects.length > 0) {
+        const projectMap = new Map(memoryState.projects.map((p) => [p.id, p]));
+        for (const rp of d.projects) {
+          projectMap.set(rp.id, { ...projectMap.get(rp.id), ...rp });
+        }
+        memoryState.projects = Array.from(projectMap.values());
+        updated = true;
+      }
+
+      if (Array.isArray(d.hierarchy) && d.hierarchy.length > 0) {
+        const hMap = new Map(memoryState.hierarchy.map((h) => [h.id, h]));
+        for (const rh of d.hierarchy) {
+          hMap.set(rh.id, { ...hMap.get(rh.id), ...rh });
+        }
+        memoryState.hierarchy = Array.from(hMap.values());
+        updated = true;
+      }
+
+      if (Array.isArray(d.activities) && d.activities.length > 0) {
+        const actMap = new Map(memoryState.activities.map((a) => [a.id, a]));
+        for (const ra of d.activities) {
+          actMap.set(ra.id, { ...actMap.get(ra.id), ...ra });
+        }
+        memoryState.activities = Array.from(actMap.values());
+        updated = true;
+      }
+
+      if (Array.isArray(d.materials) && d.materials.length > 0) {
+        const matMap = new Map(memoryState.materials.map((m) => [m.id, m]));
+        for (const rm of d.materials) {
+          matMap.set(rm.id, { ...matMap.get(rm.id), ...rm });
+        }
+        memoryState.materials = Array.from(matMap.values());
+        updated = true;
+      }
+
+      if (Array.isArray(d.stockMovements) && d.stockMovements.length > 0) {
+        const smMap = new Map(memoryState.stockMovements.map((s) => [s.id, s]));
+        for (const rsm of d.stockMovements) {
+          smMap.set(rsm.id, { ...smMap.get(rsm.id), ...rsm });
+        }
+        memoryState.stockMovements = Array.from(smMap.values());
+        updated = true;
+      }
+
+      if (Array.isArray(d.dailyLogs) && d.dailyLogs.length > 0) {
+        const dlMap = new Map(memoryState.dailyLogs.map((l) => [l.id, l]));
+        for (const rdl of d.dailyLogs) {
+          dlMap.set(rdl.id, { ...dlMap.get(rdl.id), ...rdl });
+        }
+        memoryState.dailyLogs = Array.from(dlMap.values());
+        updated = true;
+      }
+
+      if (Array.isArray(d.attendance) && d.attendance.length > 0) {
+        const attMap = new Map(memoryState.attendance.map((a: any) => [a.id, a]));
+        for (const ratt of d.attendance) {
+          attMap.set(ratt.id, { ...attMap.get(ratt.id), ...ratt });
+        }
+        memoryState.attendance = Array.from(attMap.values());
+        updated = true;
+      }
+
+      if (Array.isArray(d.expenses) && d.expenses.length > 0) {
+        const expMap = new Map(memoryState.expenses.map((e) => [e.id, e]));
+        for (const re of d.expenses) {
+          expMap.set(re.id, { ...expMap.get(re.id), ...re });
+        }
+        memoryState.expenses = Array.from(expMap.values());
+        updated = true;
+      }
+
+      if (Array.isArray(d.evidence) && d.evidence.length > 0) {
+        const evMap = new Map(memoryState.evidence.map((e) => [e.id, e]));
+        for (const rev of d.evidence) {
+          evMap.set(rev.id, { ...evMap.get(rev.id), ...rev });
+        }
+        memoryState.evidence = Array.from(evMap.values());
+        updated = true;
+      }
+
+      if (Array.isArray(d.qualityIssues) && d.qualityIssues.length > 0) {
+        const qiMap = new Map(memoryState.qualityIssues.map((q) => [q.id, q]));
+        for (const rqi of d.qualityIssues) {
+          qiMap.set(rqi.id, { ...rqi.get(rqi.id), ...rqi });
+        }
+        memoryState.qualityIssues = Array.from(qiMap.values());
+        updated = true;
+      }
+
+      if (Array.isArray(d.safetyObservations) && d.safetyObservations.length > 0) {
+        const safeMap = new Map(memoryState.safetyObservations.map((s) => [s.id, s]));
+        for (const rsafe of d.safetyObservations) {
+          safeMap.set(rsafe.id, { ...safeMap.get(rsafe.id), ...rsafe });
+        }
+        memoryState.safetyObservations = Array.from(safeMap.values());
+        updated = true;
+      }
+
+      if (updated) {
+        saveState();
+      }
+
+      return {
+        success: true,
+        message: "Successfully synchronized with Supabase live cloud",
+        remoteCounts: {
+          projects: d.projects?.length || 0,
+          activities: d.activities?.length || 0,
+          materials: d.materials?.length || 0,
+          expenses: d.expenses?.length || 0,
+        },
+      };
+    } catch (err: any) {
+      console.warn("[Repository] Hydration from Supabase error:", err);
+      return { success: false, message: err?.message || String(err) };
+    }
   },
 };

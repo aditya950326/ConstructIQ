@@ -182,4 +182,94 @@ describe("ConstructIQ Core Repository & Workflows", () => {
     assert.ok(found);
     assert.strictEqual(found.evidence_type, "video");
   });
+
+  test("two-tier approval workflow: supervisor photos and bills require Site Engineer approval before showing to Project Manager", () => {
+    const projects = repository.getProjects();
+    const projectId = projects[0].id;
+    const supervisorId = "a0000000-0000-0000-0000-000000000004";
+    const engineerId = "a0000000-0000-0000-0000-000000000003";
+    const managerId = "a0000000-0000-0000-0000-000000000002";
+
+    // 1. Supervisor uploads a photo
+    repository.setCurrentUserRole("site_supervisor");
+    const newPhoto = repository.addEvidence({
+      project_id: projectId,
+      evidence_type: "photo",
+      title: "Column C7 Shuttering Line Test",
+      description: "Plumb line alignment test by supervisor",
+      uploader_id: supervisorId,
+      uploader_role: "site_supervisor",
+      file_path: "https://example.com/c7.jpg",
+      file_type: "image/jpeg",
+      file_size_bytes: 1048576,
+      tags: ["formwork"],
+    });
+
+    // 2. Supervisor uploads a bill
+    const newBill = repository.addExpense({
+      project_id: projectId,
+      category: "Materials",
+      expense_date: "2026-10-24",
+      amount: 4500,
+      currency: "INR",
+      payee: "Shree Ganesh Hardware",
+      description: "Chalk line dori and plumb bobs",
+      uploader_id: supervisorId,
+      uploader_role: "site_supervisor",
+    });
+
+    assert.strictEqual(newPhoto.approval_status, "pending_engineer");
+    assert.strictEqual(newBill.status, "pending_engineer");
+
+    // 3. Check visibility for Site Engineer: Site Engineer CAN see them
+    repository.setCurrentUserRole("site_engineer");
+    const engEvidence = repository.getEvidence(projectId);
+    const engExpenses = repository.getExpenses(projectId);
+    assert.ok(engEvidence.some((e) => e.id === newPhoto.id), "Site engineer must see pending photo");
+    assert.ok(engExpenses.some((b) => b.id === newBill.id), "Site engineer must see pending bill");
+
+    // 4. Check visibility for Project Manager: PM MUST NOT see them yet!
+    repository.setCurrentUserRole("project_manager");
+    const pmEvidenceBefore = repository.getEvidence(projectId);
+    const pmExpensesBefore = repository.getExpenses(projectId);
+    assert.strictEqual(
+      pmEvidenceBefore.some((e) => e.id === newPhoto.id),
+      false,
+      "Project Manager MUST NOT see photo before Site Engineer approves"
+    );
+    assert.strictEqual(
+      pmExpensesBefore.some((b) => b.id === newBill.id),
+      false,
+      "Project Manager MUST NOT see bill before Site Engineer approves"
+    );
+
+    // 5. Site Engineer physically approves the photo and bill
+    repository.setCurrentUserRole("site_engineer");
+    const approvedPhotoByEng = repository.approveEvidenceByEngineer(newPhoto.id, engineerId, "Alignment verified");
+    const approvedBillByEng = repository.approveExpenseByEngineer(newBill.id, engineerId, "Hardware verified");
+
+    assert.strictEqual(approvedPhotoByEng?.approval_status, "pending_manager");
+    assert.strictEqual(approvedBillByEng?.status, "pending_manager");
+
+    // 6. Check visibility for Project Manager: NOW it shows to Project Manager!
+    repository.setCurrentUserRole("project_manager");
+    const pmEvidenceAfter = repository.getEvidence(projectId);
+    const pmExpensesAfter = repository.getExpenses(projectId);
+    assert.ok(
+      pmEvidenceAfter.some((e) => e.id === newPhoto.id),
+      "Project Manager must now see photo after Site Engineer approval"
+    );
+    assert.ok(
+      pmExpensesAfter.some((b) => b.id === newBill.id),
+      "Project Manager must now see bill after Site Engineer approval"
+    );
+
+    // 7. Project Manager physically approves both
+    const finalPhoto = repository.approveEvidenceByManager(newPhoto.id, managerId, "Sign-off authorized");
+    const finalBill = repository.approveExpenseByManager(newBill.id, managerId, "Disbursement approved");
+
+    assert.strictEqual(finalPhoto?.approval_status, "approved");
+    assert.strictEqual(finalPhoto?.review_status, "verified");
+    assert.strictEqual(finalBill?.status, "approved");
+  });
 });

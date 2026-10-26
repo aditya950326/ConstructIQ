@@ -15,6 +15,12 @@ import {
   X,
   Building2,
   BarChart3,
+  Check,
+  HardHat,
+  Briefcase,
+  FileText,
+  AlertCircle,
+  Eye,
 } from "lucide-react";
 import {
   BudgetVsSpentChart,
@@ -29,6 +35,13 @@ export default function FinancialsPage() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
 
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [currentRole, setCurrentRole] = useState<any>("site_engineer");
+
+  const [rejectingItem, setRejectingItem] = useState<{ id: string; title: string } | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [previewReceiptUrl, setPreviewReceiptUrl] = useState<string | null>(null);
+
   // Form State
   const [category, setCategory] = useState<any>("Materials");
   const [expenseDate, setExpenseDate] = useState("2026-10-23");
@@ -38,11 +51,44 @@ export default function FinancialsPage() {
 
   useEffect(() => {
     loadData();
+    window.addEventListener("constructiq-data-update", loadData);
+    window.addEventListener("constructiq-role-change", loadData);
+    return () => {
+      window.removeEventListener("constructiq-data-update", loadData);
+      window.removeEventListener("constructiq-role-change", loadData);
+    };
   }, [projectId]);
 
   const loadData = () => {
+    setCurrentUser(repository.getCurrentUser());
+    setCurrentRole(repository.getCurrentUserRole());
     setProject(repository.getProjectById(projectId) || null);
     setExpenses(repository.getExpenses(projectId));
+  };
+
+  const handleApproveBill = (bill: Expense) => {
+    if (currentRole === "site_engineer") {
+      repository.approveExpenseByEngineer(
+        bill.id,
+        currentUser?.id,
+        `Voucher and materials physically checked on site by Site Engineer ${currentUser?.full_name || ""}`
+      );
+    } else {
+      repository.approveExpenseByManager(
+        bill.id,
+        currentUser?.id,
+        `Commercial payment disbursement authorized by Project Manager ${currentUser?.full_name || ""}`
+      );
+    }
+    loadData();
+  };
+
+  const handleConfirmReject = () => {
+    if (!rejectingItem) return;
+    repository.rejectExpense(rejectingItem.id, currentUser?.id, rejectReason || "Rejected during commercial review");
+    setRejectingItem(null);
+    setRejectReason("");
+    loadData();
   };
 
   const handleAddExpense = (e: React.FormEvent) => {
@@ -206,6 +252,116 @@ export default function FinancialsPage() {
         </div>
       </div>
 
+      {/* PENDING BILLS APPROVAL SECTION */}
+      {(() => {
+        const pendingBills = expenses.filter((e) => {
+          if (currentRole === "site_engineer") return e.status === "pending_engineer";
+          if (currentRole === "project_manager") return e.status === "pending_manager";
+          return e.status === "pending_engineer" || e.status === "pending_manager";
+        });
+
+        if (pendingBills.length === 0) return null;
+
+        return (
+          <div className="bg-construct-surface border-2 border-construct-orange/40 rounded-xl shadow-subtle overflow-hidden animate-in fade-in">
+            <div className="p-4 border-b border-construct-border bg-orange-50/50 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className={`p-2 rounded-lg ${currentRole === "site_engineer" ? "bg-emerald-100 text-emerald-800" : "bg-orange-100 text-construct-orange"}`}>
+                  {currentRole === "site_engineer" ? <HardHat className="w-5 h-5" /> : <Briefcase className="w-5 h-5" />}
+                </div>
+                <div>
+                  <h3 className="font-heading font-extrabold text-sm text-construct-text">
+                    {currentRole === "site_engineer"
+                      ? `Supervisor Site Bills Awaiting Site Engineer Review (${pendingBills.length})`
+                      : `Engineer-Approved Site Bills Awaiting PM Authorization (${pendingBills.length})`}
+                  </h3>
+                  <p className="text-xs text-construct-secondary">
+                    {currentRole === "site_engineer"
+                      ? "Vouchers and bills uploaded by site supervisor. Physically inspect and approve to forward to the Project Manager."
+                      : "Site Engineer Kalyani Jadhav has inspected and verified these bills. Click physical Authorize & Disburse button to release funds."}
+                  </p>
+                </div>
+              </div>
+              <span className="px-2.5 py-1 rounded-full text-xs font-mono font-bold bg-construct-orange text-white">
+                Action Required
+              </span>
+            </div>
+
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse text-xs">
+                <thead>
+                  <tr className="border-b border-construct-border bg-construct-bg text-[11px] font-mono font-bold text-construct-secondary">
+                    <th className="py-3 px-4">DATE</th>
+                    <th className="py-3 px-4">CATEGORY</th>
+                    <th className="py-3 px-4">PAYEE / VENDOR</th>
+                    <th className="py-3 px-4">PURPOSE & DESCRIPTION</th>
+                    <th className="py-3 px-4">AMOUNT</th>
+                    <th className="py-3 px-4">VOUCHER</th>
+                    <th className="py-3 px-4">GOVERNANCE</th>
+                    <th className="py-3 px-4 text-right">ACTION</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-construct-border/60">
+                  {pendingBills.map((bill) => (
+                    <tr key={bill.id} className="hover:bg-construct-muted/40 transition-colors">
+                      <td className="py-3 px-4 font-mono text-construct-secondary">{bill.expense_date}</td>
+                      <td className="py-3 px-4 font-mono font-bold text-construct-orange">{bill.category}</td>
+                      <td className="py-3 px-4 font-semibold text-construct-text">{bill.payee}</td>
+                      <td className="py-3 px-4 text-construct-secondary">{bill.description}</td>
+                      <td className="py-3 px-4 font-mono font-bold text-construct-text text-sm">
+                        ₹{bill.amount.toLocaleString()}
+                      </td>
+                      <td className="py-3 px-4">
+                        {bill.receipt_url ? (
+                          <button
+                            type="button"
+                            onClick={() => setPreviewReceiptUrl(bill.receipt_url!)}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono font-bold bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100 transition-colors cursor-pointer"
+                          >
+                            <FileText className="w-3 h-3" />
+                            <span>Voucher</span>
+                          </button>
+                        ) : (
+                          <span className="text-construct-secondary font-mono text-[11px]">—</span>
+                        )}
+                      </td>
+                      <td className="py-3 px-4">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
+                          bill.status === "pending_manager" ? "bg-blue-100 text-blue-800 border border-blue-200" : "bg-amber-100 text-amber-800 border border-amber-200"
+                        }`}>
+                          {bill.status === "pending_manager" ? "STAGE 2: AWAITING PM" : "STAGE 1: AWAITING ENG"}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setRejectingItem({ id: bill.id, title: `${bill.payee} (₹${bill.amount})` })}
+                            className="px-2.5 py-1.5 rounded-lg border border-rose-300 text-rose-700 hover:bg-rose-50 text-xs font-bold transition-colors cursor-pointer"
+                          >
+                            Reject
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleApproveBill(bill)}
+                            className="px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+                          >
+                            <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                            <span>
+                              {currentRole === "site_engineer" ? "Approve Bill (Site Engineer)" : "Authorize & Disburse (PM)"}
+                            </span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Expenses Breakdown Table */}
       <div className="bg-construct-surface border border-construct-border rounded-xl shadow-subtle overflow-hidden">
         <div className="p-4 border-b border-construct-border flex items-center justify-between">
@@ -213,7 +369,7 @@ export default function FinancialsPage() {
             Commercial Expense Disbursements Ledger
           </h3>
           <span className="text-xs font-mono text-construct-secondary">
-            {expenses.length} Approved Vouchers
+            {expenses.length} Total Vouchers in Scope
           </span>
         </div>
 
@@ -225,8 +381,9 @@ export default function FinancialsPage() {
                 <th className="py-3 px-4">CATEGORY</th>
                 <th className="py-3 px-4">PAYEE / VENDOR</th>
                 <th className="py-3 px-4">PURPOSE & DESCRIPTION</th>
-                <th className="py-3 px-4">DISBURSED AMOUNT</th>
-                <th className="py-3 px-4">STATUS</th>
+                <th className="py-3 px-4">AMOUNT</th>
+                <th className="py-3 px-4">VOUCHER</th>
+                <th className="py-3 px-4">GOVERNANCE STATUS</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-construct-border/60">
@@ -240,9 +397,37 @@ export default function FinancialsPage() {
                     ₹{exp.amount.toLocaleString()}
                   </td>
                   <td className="py-3 px-4">
-                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800">
-                      APPROVED
-                    </span>
+                    {exp.receipt_url ? (
+                      <button
+                        type="button"
+                        onClick={() => setPreviewReceiptUrl(exp.receipt_url!)}
+                        className="inline-flex items-center gap-1 text-purple-700 font-bold hover:underline cursor-pointer"
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        <span>Voucher</span>
+                      </button>
+                    ) : (
+                      <span className="text-construct-secondary font-mono text-[11px]">—</span>
+                    )}
+                  </td>
+                  <td className="py-3 px-4">
+                    {exp.status === "approved" ? (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800">
+                        APPROVED
+                      </span>
+                    ) : exp.status === "pending_manager" ? (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-blue-100 text-blue-800">
+                        AWAITING PM
+                      </span>
+                    ) : exp.status === "pending_engineer" ? (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-100 text-amber-800">
+                        AWAITING SITE ENG
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-rose-100 text-rose-800">
+                        {exp.status.toUpperCase()}
+                      </span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -259,7 +444,7 @@ export default function FinancialsPage() {
               <h3 className="font-heading font-extrabold text-base text-construct-text">
                 Record Commercial Expense Disbursement
               </h3>
-              <button onClick={() => setIsAddModalOpen(false)} className="text-construct-secondary hover:text-construct-text">
+              <button onClick={() => setIsAddModalOpen(false)} className="text-construct-secondary hover:text-construct-text cursor-pointer">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -288,7 +473,8 @@ export default function FinancialsPage() {
                     value={expenseDate}
                     onChange={(e) => setExpenseDate(e.target.value)}
                     className="w-full p-2 border border-construct-border rounded-lg bg-construct-bg font-mono focus:outline-none focus:border-construct-orange text-xs"
-                  />
+                  >
+                  </input>
                 </div>
               </div>
 
@@ -331,18 +517,88 @@ export default function FinancialsPage() {
                 <button
                   type="button"
                   onClick={() => setIsAddModalOpen(false)}
-                  className="px-4 py-2 rounded-lg border border-construct-border text-construct-secondary hover:bg-construct-muted text-xs font-semibold"
+                  className="px-4 py-2 rounded-lg border border-construct-border text-construct-secondary hover:bg-construct-muted text-xs font-semibold cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-lg bg-construct-orange text-white text-xs font-semibold hover:bg-construct-orangeHover shadow-sm"
+                  className="px-4 py-2 rounded-lg bg-construct-orange text-white text-xs font-semibold hover:bg-construct-orangeHover shadow-sm cursor-pointer"
                 >
                   Disburse & Authorize
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Rejection Note Modal */}
+      {rejectingItem && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div className="w-full max-w-md bg-construct-surface border border-construct-border rounded-xl shadow-elevated p-5 space-y-4">
+            <h3 className="font-heading font-bold text-sm text-rose-700 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4" />
+              <span>Return / Reject Site Bill</span>
+            </h3>
+            <p className="text-xs text-construct-text">
+              Bill: <strong>{rejectingItem.title}</strong>
+            </p>
+            <div>
+              <label className="block text-xs font-bold text-construct-text mb-1">
+                Reason for Rejection / Return Note *
+              </label>
+              <textarea
+                rows={3}
+                required
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                placeholder="e.g. Rate per liter does not match contract rate, please revise..."
+                className="w-full p-2.5 border border-construct-border rounded-lg bg-construct-bg text-xs focus:outline-none focus:border-rose-500"
+              />
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setRejectingItem(null)}
+                className="px-3 py-1.5 rounded-lg border border-construct-border text-construct-secondary text-xs font-bold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmReject}
+                className="px-4 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-bold hover:bg-rose-700 cursor-pointer"
+              >
+                Confirm Rejection
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Voucher Preview Modal */}
+      {previewReceiptUrl && (
+        <div className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs">
+          <div className="w-full max-w-lg bg-construct-surface border border-construct-border rounded-xl shadow-elevated p-5 space-y-3">
+            <div className="flex items-center justify-between pb-2 border-b border-construct-border">
+              <h3 className="font-heading font-bold text-sm text-construct-text">Voucher & Receipt Document</h3>
+              <button onClick={() => setPreviewReceiptUrl(null)} className="text-construct-secondary hover:text-construct-text cursor-pointer">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="rounded-lg overflow-hidden bg-black flex items-center justify-center max-h-96">
+              <img src={previewReceiptUrl} alt="Receipt" className="max-h-96 w-auto object-contain" />
+            </div>
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setPreviewReceiptUrl(null)}
+                className="px-4 py-1.5 rounded-lg bg-construct-text text-white text-xs font-bold cursor-pointer"
+              >
+                Close Voucher
+              </button>
+            </div>
           </div>
         </div>
       )}

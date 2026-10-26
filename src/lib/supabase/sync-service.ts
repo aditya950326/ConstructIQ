@@ -1,5 +1,4 @@
 import { createClient, isSupabaseConfigured } from "./client";
-import { repository } from "../data/repository";
 
 export interface SyncStatus {
   connected: boolean;
@@ -119,6 +118,7 @@ export const supabaseSyncService = {
     let totalSynced = 0;
 
     try {
+      const { repository } = await import("../data/repository");
       const allProjects = repository.getProjects();
       const allProfiles = repository.getProfiles();
 
@@ -338,16 +338,210 @@ export const supabaseSyncService = {
   },
 
   /**
-   * Automatically sync an individual write to Supabase in the background
+   * Pull all records from Supabase tables to hydrate the local application
    */
-  async autoSaveRecord(table: string, record: any): Promise<void> {
-    if (!isSupabaseConfigured() || typeof window === "undefined") return;
+  async pullRemoteData(): Promise<{ success: boolean; data?: any; error?: string }> {
+    if (!isSupabaseConfigured()) {
+      return { success: false, error: "Supabase is not configured." };
+    }
 
     try {
       const supabase = createClient();
-      await supabase.from(table).upsert(record, { onConflict: "id" });
-    } catch (e) {
-      console.warn(`[Supabase AutoSync] Background write to ${table} failed:`, e);
+      const [
+        { data: projects },
+        { data: hierarchy },
+        { data: activities },
+        { data: materials },
+        { data: stockMovements },
+        { data: dailyLogs },
+        { data: attendance },
+        { data: expenses },
+        { data: evidence },
+        { data: inspections },
+        { data: qualityIssues },
+        { data: safetyObservations },
+      ] = await Promise.all([
+        supabase.from("projects").select("*"),
+        supabase.from("hierarchy_nodes").select("*"),
+        supabase.from("activities").select("*"),
+        supabase.from("materials").select("*"),
+        supabase.from("stock_movements").select("*"),
+        supabase.from("daily_logs").select("*"),
+        supabase.from("daily_attendance").select("*"),
+        supabase.from("expenses").select("*"),
+        supabase.from("evidence_files").select("*"),
+        supabase.from("inspections").select("*"),
+        supabase.from("quality_issues").select("*"),
+        supabase.from("safety_observations").select("*"),
+      ]);
+
+      return {
+        success: true,
+        data: {
+          projects: projects || [],
+          hierarchy: hierarchy || [],
+          activities: activities || [],
+          materials: materials || [],
+          stockMovements: stockMovements || [],
+          dailyLogs: dailyLogs || [],
+          attendance: attendance || [],
+          expenses: expenses || [],
+          evidence: evidence || [],
+          inspections: inspections || [],
+          qualityIssues: qualityIssues || [],
+          safetyObservations: safetyObservations || [],
+        },
+      };
+    } catch (err: any) {
+      console.warn("[Supabase Pull] Error fetching remote data:", err);
+      return { success: false, error: err.message || String(err) };
+    }
+  },
+
+  /**
+   * Automatically sync an individual write to Supabase in the background
+   */
+  async autoSaveRecord(table: string, rawRecord: any): Promise<void> {
+    if (!isSupabaseConfigured() || !rawRecord) return;
+
+    try {
+      const supabase = createClient();
+      const record = { ...rawRecord };
+
+      // Normalize UUIDs and constraints for PostgreSQL
+      if (record.id) record.id = ensureUuid(record.id);
+      if (record.project_id) record.project_id = ensureUuid(record.project_id);
+      if (record.hierarchy_node_id) record.hierarchy_node_id = ensureUuid(record.hierarchy_node_id);
+      if (record.activity_id) record.activity_id = ensureUuid(record.activity_id);
+      if (record.author_id) record.author_id = ensureUuid(record.author_id);
+      if (record.supervisor_id) record.supervisor_id = ensureUuid(record.supervisor_id);
+      if (record.uploader_id) record.uploader_id = ensureUuid(record.uploader_id);
+      if (record.performed_by) record.performed_by = ensureUuid(record.performed_by);
+      if (record.material_id) record.material_id = ensureUuid(record.material_id);
+      if (record.project_manager_id) record.project_manager_id = ensureUuid(record.project_manager_id);
+      if (record.responsible_id) record.responsible_id = ensureUuid(record.responsible_id);
+      if (record.reviewed_by) record.reviewed_by = ensureUuid(record.reviewed_by);
+      if (record.approved_by) record.approved_by = ensureUuid(record.approved_by);
+      if (record.assigned_to) record.assigned_to = ensureUuid(record.assigned_to);
+      if (record.observer_id) record.observer_id = ensureUuid(record.observer_id);
+      if (record.inspector_id) record.inspector_id = ensureUuid(record.inspector_id);
+      if (record.source_id) record.source_id = ensureUuid(record.source_id);
+      if (record.verified_by) record.verified_by = ensureUuid(record.verified_by);
+      if (record.evidence_file_id) record.evidence_file_id = ensureUuid(record.evidence_file_id);
+      if (record.daily_log_id) record.daily_log_id = ensureUuid(record.daily_log_id);
+      if (record.parent_id) record.parent_id = ensureUuid(record.parent_id);
+      if (record.shift === "day") record.shift = "morning";
+
+      // Expenses specific payload mapping (matching PostgreSQL table schema)
+      if (table === "expenses") {
+        let validStatus = "pending_approval";
+        if (["approved", "rejected", "draft", "paid"].includes(record.status)) {
+          validStatus = record.status;
+        }
+        const expensePayload = {
+          id: record.id,
+          project_id: record.project_id,
+          activity_id: record.activity_id || null,
+          category: record.category || "Materials",
+          description: record.description || record.payee || "Site Expense",
+          amount: Number(record.amount) || 0,
+          currency: record.currency || "INR",
+          payee: record.payee || "Vendor",
+          expense_date: record.expense_date || new Date().toISOString().split("T")[0],
+          status: validStatus,
+          approved_by: record.approved_by || record.manager_approved_by ? ensureUuid(record.approved_by || record.manager_approved_by) : null,
+          receipt_url: record.receipt_url || null,
+        };
+        const { error } = await supabase.from("expenses").upsert(expensePayload, { onConflict: "id" });
+        if (error) {
+          console.warn("[Supabase AutoSave] Background write to expenses failed:", error.message);
+        }
+        return;
+      }
+
+      // Quality issues specific payload mapping
+      if (table === "quality_issues") {
+        const qiPayload = {
+          id: record.id,
+          project_id: record.project_id,
+          activity_id: record.activity_id || null,
+          inspection_id: record.inspection_id || null,
+          title: record.title,
+          description: record.description || "",
+          severity: record.severity || "minor",
+          status: record.status || "open",
+          assigned_to: record.assigned_to ? ensureUuid(record.assigned_to) : null,
+          due_date: record.due_date || null,
+          resolved_at: record.resolved_at || null,
+          evidence_file_id: record.evidence_file_id ? ensureUuid(record.evidence_file_id) : null,
+        };
+        const { error } = await supabase.from("quality_issues").upsert(qiPayload, { onConflict: "id" });
+        if (error) console.warn("[Supabase AutoSave] Background write to quality_issues failed:", error.message);
+        return;
+      }
+
+      // Safety observations specific payload mapping
+      if (table === "safety_observations") {
+        const safePayload = {
+          id: record.id,
+          project_id: record.project_id,
+          observer_id: record.observer_id ? ensureUuid(record.observer_id) : "a0000000-0000-0000-0000-000000000003",
+          observation_type: record.observation_type || "hazard",
+          risk_level: record.risk_level || "medium",
+          title: record.title,
+          location_details: record.location_details || "Site Work Area",
+          immediate_action_taken: record.immediate_action_taken || null,
+          status: record.status || "open",
+        };
+        const { error } = await supabase.from("safety_observations").upsert(safePayload, { onConflict: "id" });
+        if (error) console.warn("[Supabase AutoSave] Background write to safety_observations failed:", error.message);
+        return;
+      }
+
+      // Corrective actions specific payload mapping
+      if (table === "corrective_actions") {
+        const caPayload = {
+          id: record.id,
+          project_id: record.project_id,
+          issue_type: record.issue_type || "quality",
+          source_id: record.source_id ? ensureUuid(record.source_id) : ensureUuid(record.id),
+          title: record.title,
+          description: record.description || "",
+          assigned_to: record.assigned_to ? ensureUuid(record.assigned_to) : "a0000000-0000-0000-0000-000000000003",
+          due_date: record.due_date || new Date().toISOString().split("T")[0],
+          completed_at: record.completed_at || null,
+          status: record.status || "assigned",
+          verified_by: record.verified_by ? ensureUuid(record.verified_by) : null,
+        };
+        const { error } = await supabase.from("corrective_actions").upsert(caPayload, { onConflict: "id" });
+        if (error) console.warn("[Supabase AutoSave] Background write to corrective_actions failed:", error.message);
+        return;
+      }
+
+      const { error } = await supabase.from(table).upsert(record, { onConflict: "id" });
+      if (error) {
+        console.warn(`[Supabase AutoSave] Background write to ${table} failed:`, error.message);
+      }
+    } catch (e: any) {
+      console.warn(`[Supabase AutoSave] Background write to ${table} failed:`, e?.message || e);
+    }
+  },
+
+  /**
+   * Delete record from Supabase
+   */
+  async autoDeleteRecord(table: string, id: string): Promise<void> {
+    if (!isSupabaseConfigured() || !id) return;
+
+    try {
+      const supabase = createClient();
+      const validId = ensureUuid(id);
+      const { error } = await supabase.from(table).delete().eq("id", validId);
+      if (error) {
+        console.warn(`[Supabase AutoDelete] Delete from ${table} failed:`, error.message);
+      }
+    } catch (e: any) {
+      console.warn(`[Supabase AutoDelete] Delete from ${table} failed:`, e?.message || e);
     }
   },
 };
